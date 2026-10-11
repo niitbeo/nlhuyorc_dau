@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import socket
 import shutil
@@ -503,6 +504,34 @@ def document_facets(user=Depends(current_user)):
             "total": sum(kinds.values())}
 
 
+@app.get("/api/review/queue")
+def review_queue(user=Depends(current_user), limit: int = 30, offset: int = 0):
+    """Documents the current user can correct, ordered by unfinished review work."""
+    limit, offset = max(1, min(limit, 100)), max(0, offset)
+    writable = "1=1" if user["role"] == "admin" else "d.owner_id=?"
+    params = () if user["role"] == "admin" else (user["id"],)
+    pending = (
+        "(d.classification_status='proposed' OR EXISTS ("
+        "SELECT 1 FROM fields f WHERE f.version_id=d.current_version_id AND f.status='proposed') "
+        "OR EXISTS (SELECT 1 FROM relations r WHERE r.status='proposed' "
+        "AND r.source_id=d.id))"
+    )
+    with connect() as db:
+        total = db.execute(f"SELECT COUNT(*) FROM documents d WHERE {writable} AND {pending}", params).fetchone()[0]
+        rows = db.execute(
+            "SELECT d.id,d.title,d.kind,d.subtype,d.department,d.classification_status,"
+            "d.created_at,(SELECT COUNT(*) FROM fields f WHERE f.version_id=d.current_version_id "
+            "AND f.status='proposed') AS pending_fields,"
+            "(SELECT COUNT(*) FROM relations r WHERE r.status='proposed' "
+            "AND r.source_id=d.id) AS pending_relations,"
+            "(SELECT e.archive_path FROM import_batch_entries e WHERE e.document_id=d.id LIMIT 1) "
+            "AS archive_path FROM documents d "
+            f"WHERE {writable} AND {pending} ORDER BY d.created_at DESC,d.rowid DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        ).fetchall()
+    return {"items": [dict(row) for row in rows], "total": total, "limit": limit, "offset": offset}
+
+
 @app.get("/api/documents/{document_id}")
 def get_document(document_id: str, version_id: Optional[str] = None, user=Depends(current_user)):
     with connect() as db:
@@ -540,6 +569,83 @@ def get_document(document_id: str, version_id: Optional[str] = None, user=Depend
         return {"document": dict(doc), "selected_version_id": selected_version,
                 "versions": versions, "pages": pages,
                 "fields": fields, "relations": relations, "grants": grants, "sources": sources}
+
+
+@app.get("/api/documents/{document_id}/provenance")
+def document_provenance(document_id: str, version_id: Optional[str] = None,
+                        user=Depends(current_user)):
+    with connect() as db:
+        doc = document_for(db, document_id, user)
+        selected_id = version_id or doc["current_version_id"]
+        if not selected_id:
+            selected = db.execute("SELECT * FROM versions WHERE document_id=? ORDER BY version_no DESC LIMIT 1",
+                                  (document_id,)).fetchone()
+        else:
+            selected = db.execute("SELECT * FROM versions WHERE id=? AND document_id=?",
+                                  (selected_id, document_id)).fetchone()
+        if version_id and not selected:
+            raise HTTPException(404, "Không tìm thấy phiên bản")
+        sources = [dict(row) for row in db.execute(
+            "SELECT e.archive_path,e.collection_key,e.source_role,b.source_name,b.created_at "
+            "FROM import_batch_entries e JOIN import_batches b ON b.id=e.batch_id "
+            "WHERE e.document_id=? ORDER BY e.created_at", (document_id,))]
+        duplicates = []
+        if selected:
+            acl_sql, acl_params = _acl(user)
+            candidates = db.execute(
+                "SELECT DISTINCT d.id,d.title,d.department,d.created_at FROM versions v "
+                "JOIN documents d ON d.id=v.document_id "
+                f"WHERE v.sha256=? AND d.id!=? AND {acl_sql} "
+                "ORDER BY d.created_at DESC LIMIT 20",
+                (selected["sha256"], document_id, *acl_params),
+            ).fetchall()
+            duplicates = [{"id": row["id"], "title": row["title"],
+                           "department": row["department"]}
+                          for row in candidates]
+        events = []
+        if auth.can_write(user, doc):
+            events = [dict(row) for row in db.execute(
+                "SELECT a.action,a.created_at,u.username AS actor FROM audit a "
+                "LEFT JOIN users u ON u.id=a.actor_id WHERE a.document_id=? "
+                "AND a.action IN ('document.create','document.update','version.upload',"
+                "'version.retry','field.review','relation.add','relation.review') "
+                "ORDER BY a.id DESC LIMIT 30", (document_id,))]
+        pages = [dict(row) for row in db.execute(
+            "SELECT source,COUNT(*) AS count FROM pages WHERE version_id=? GROUP BY source",
+            (selected["id"],))] if selected else []
+        return {"document_id": document_id, "version": {
+                    "id": selected["id"], "version_no": selected["version_no"],
+                    "filename": selected["filename"], "sha256": selected["sha256"],
+                    "status": selected["status"], "created_at": selected["created_at"]
+                } if selected else None,
+                "sources": sources, "page_sources": pages,
+                "duplicates": duplicates, "events": events}
+
+
+@app.post("/api/documents/{document_id}/verify")
+def verify_document(document_id: str, version_id: Optional[str] = None,
+                    user=Depends(current_user)):
+    with connect() as db:
+        doc = document_for(db, document_id, user)
+        selected_id = version_id or doc["current_version_id"]
+        if selected_id:
+            version = db.execute("SELECT id,sha256,blob_name FROM versions WHERE id=? AND document_id=?",
+                                 (selected_id, document_id)).fetchone()
+        else:
+            version = db.execute("SELECT id,sha256,blob_name FROM versions WHERE document_id=? "
+                                 "ORDER BY version_no DESC LIMIT 1", (document_id,)).fetchone()
+        if not version:
+            raise HTTPException(404, "Không tìm thấy phiên bản")
+        blob = data_dir() / "blobs" / version["blob_name"]
+        if not blob.is_file():
+            return {"verified": False, "reason": "missing", "version_id": version["id"]}
+        digest = hashlib.sha256()
+        with blob.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+        return {"verified": digest.hexdigest() == version["sha256"],
+                "reason": "ok" if digest.hexdigest() == version["sha256"] else "checksum_mismatch",
+                "version_id": version["id"]}
 
 
 @app.patch("/api/documents/{document_id}")

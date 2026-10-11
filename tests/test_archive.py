@@ -151,3 +151,34 @@ def test_failed_ocr_can_retry_after_importing_pages(monkeypatch, tmp_path):
         assert run_once()
         assert client.get("/api/jobs/" + result.json()["job_id"], headers=headers).json()["status"] == "ready"
         assert client.get("/api/documents/" + document_id, headers=headers).json()["pages"][0]["source"] == "existing-ocr"
+
+
+def test_review_queue_provenance_integrity_and_duplicate_acl(monkeypatch, tmp_path):
+    monkeypatch.setenv("DAU_DATA_DIR", str(tmp_path / "archive"))
+    monkeypatch.setenv("DAU_RUN_WORKER", "0")
+    with TestClient(app) as client:
+        create_user("clerk", "password-for-tests", "staff", "Văn thư")
+        create_user("teacher", "password-for-tests", "staff", "Khoa Xây dựng")
+        clerk, teacher = login(client, "clerk"), login(client, "teacher")
+        text = "Mã tài liệu: QT.01\nNgày hiệu lực: 01/10/2026\nNội dung quy trình."
+        first = upload(client, clerk, "iso", "Quy trình bản A", text, visibility="restricted")
+        second = upload(client, teacher, "iso", "Quy trình bản B", text,
+                        visibility="restricted", department="Khoa Xây dựng")
+        with connect() as db:
+            db.execute("UPDATE documents SET classification_status='proposed' WHERE id IN (?,?)",
+                       (first, second))
+        queue = client.get("/api/review/queue", headers=clerk).json()
+        assert queue["total"] == 1 and queue["items"][0]["id"] == first
+        assert queue["items"][0]["pending_fields"] > 0
+        assert client.get(f"/api/documents/{first}/provenance", headers=teacher).status_code == 404
+        provenance = client.get(f"/api/documents/{first}/provenance", headers=clerk).json()
+        assert provenance["version"]["sha256"] and provenance["page_sources"][0]["count"] == 1
+        assert provenance["duplicates"] == []
+        assert any(event["action"] == "document.create" for event in provenance["events"])
+        assert client.post(f"/api/documents/{first}/verify", headers=clerk).json()["verified"]
+        with connect() as db:
+            version = db.execute("SELECT blob_name FROM versions WHERE document_id=?", (first,)).fetchone()
+        (tmp_path / "archive" / "blobs" / version["blob_name"]).write_bytes(b"modified")
+        result = client.post(f"/api/documents/{first}/verify", headers=clerk).json()
+        assert not result["verified"] and result["reason"] == "checksum_mismatch"
+        assert client.post(f"/api/documents/{second}/verify", headers=clerk).status_code == 404

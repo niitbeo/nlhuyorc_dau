@@ -57,6 +57,8 @@ Phân loại ban đầu dựa vào đường dẫn, tên tệp và nội dung đ
 
 Kho tài liệu phân trang 50 hồ sơ mỗi lần và lọc trên SQLite theo tên, đường dẫn nguồn, loại, đơn vị hoặc bộ hồ sơ. Bộ lọc và tổng số hồ sơ được tính trên toàn bộ dữ liệu người dùng được phép xem, không bị giới hạn bởi số tài liệu đã tải vào trình duyệt.
 
+Menu **Cần xác nhận** gom các hồ sơ có phân loại, trường dữ liệu hoặc quan hệ còn ở trạng thái đề xuất; chỉ chủ hồ sơ và quản trị viên thấy các mục mình có quyền sửa. Tab **Nguồn gốc** trong từng hồ sơ nối đường dẫn trong archive với phiên bản SHA-256, nguồn text/OCR theo trang, các bản trùng byte mà người xem được phép truy cập và lịch sử thao tác của người có quyền sửa. Nút **Kiểm tra toàn vẹn** tính lại SHA-256 của tệp đã lưu để phát hiện tệp thiếu hoặc bị thay đổi. Cách trình bày theo nguồn gốc và luồng xác nhận được tham khảo từ [ArkhamMirror](https://github.com/mantisfury/ArkhamMirror); không dùng các module điều tra hoặc dịch vụ đám mây của dự án đó.
+
 Để nhập archive đã có sẵn trên máy mà không tải qua trình duyệt:
 
 ```bash
