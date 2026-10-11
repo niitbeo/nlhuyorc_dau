@@ -1,11 +1,12 @@
-"""Small, labeled OCR evaluations launched from the administration UI.
+"""OCR evaluations for bundled samples and administrator-selected PDF/image files.
 
-Only bundled synthetic/public samples can be evaluated. Documents in the archive
-are never sent to the optional external comparator.
+Uploaded pages are sent to Gemini only after an explicit opt-in. Archive documents
+are never selected implicitly for the external comparison.
 """
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import statistics
@@ -19,6 +20,9 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import fitz
+from PIL import Image, ImageOps, UnidentifiedImageError
+
 from .db import data_dir
 from .secrets import gemini_key
 
@@ -30,6 +34,9 @@ PROMPT = ("Đọc chính xác toàn bộ chữ tiếng Việt trong ảnh theo t
           "Chỉ trả về văn bản, giữ chữ hoa, dấu câu và xuống dòng. Không thêm giải thích hay Markdown.")
 _lock = threading.Lock()
 _job: dict | None = None
+MAX_UPLOAD_BYTES = 30 * 1024 * 1024
+MAX_UPLOAD_PAGES = 3
+UPLOAD_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
 
 
 def _normalize(value: str) -> str:
@@ -180,7 +187,7 @@ def start(printed_count: int, handwritten_count: int, compare_gemini: bool) -> d
     with _lock:
         if _job and _job["status"] == "running":
             raise RuntimeError("Đã có phép kiểm tra model đang chạy")
-        _job = {"id": uuid.uuid4().hex, "status": "running",
+        _job = {"id": uuid.uuid4().hex, "source": "bundled", "status": "running",
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "settings": {"printed_count": printed_count, "handwritten_count": handwritten_count,
                              "compare_gemini": compare_gemini},
@@ -190,6 +197,134 @@ def start(printed_count: int, handwritten_count: int, compare_gemini: bool) -> d
         snapshot = json.loads(json.dumps(_job))
         threading.Thread(target=_run, args=(_job["id"],), daemon=True).start()
         return snapshot
+
+
+def _upload_pages(content: bytes, filename: str, first_page: int, page_count: int) -> list[dict]:
+    """Render only the selected pages as bounded PNGs for both OCR backends."""
+    suffix = Path(filename).suffix.lower()
+    if suffix not in UPLOAD_EXTENSIONS:
+        raise ValueError("Chỉ nhận PDF hoặc ảnh PNG, JPG, WebP, TIFF")
+    pages: list[dict] = []
+    try:
+        if suffix == ".pdf":
+            with fitz.open(stream=content, filetype="pdf") as document:
+                if document.is_encrypted:
+                    raise ValueError("PDF có mật khẩu; hãy mở khóa trước khi kiểm tra")
+                total = len(document)
+                if first_page > total:
+                    raise ValueError(f"Tệp chỉ có {total} trang")
+                for index in range(first_page - 1, min(total, first_page - 1 + page_count)):
+                    page = document[index]
+                    scale = min(2.0, 2400 / max(page.rect.width, page.rect.height))
+                    pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+                    pages.append({"id": f"trang_{index + 1}", "page_no": index + 1,
+                                  "kind": "uploaded_page", "content": pix.tobytes("png"),
+                                  "mime": "image/png"})
+        else:
+            with Image.open(io.BytesIO(content)) as image:
+                total = getattr(image, "n_frames", 1)
+                if first_page > total:
+                    raise ValueError(f"Tệp chỉ có {total} trang")
+                for index in range(first_page - 1, min(total, first_page - 1 + page_count)):
+                    image.seek(index)
+                    if image.width * image.height > 25_000_000:
+                        raise ValueError("Ảnh vượt quá 25 triệu điểm ảnh")
+                    frame = ImageOps.exif_transpose(image).convert("RGB")
+                    frame.thumbnail((2400, 2400))
+                    output = io.BytesIO()
+                    frame.save(output, format="PNG")
+                    pages.append({"id": f"trang_{index + 1}", "page_no": index + 1,
+                                  "kind": "uploaded_page", "content": output.getvalue(),
+                                  "mime": "image/png"})
+    except (fitz.FileDataError, UnidentifiedImageError, Image.DecompressionBombError,
+            OSError, ValueError) as error:
+        if isinstance(error, ValueError) and str(error).startswith(("PDF có", "Tệp chỉ", "Ảnh vượt")):
+            raise
+        raise ValueError("Không đọc được PDF hoặc ảnh đã chọn") from error
+    return pages
+
+
+def start_upload(content: bytes, filename: str, first_page: int, page_count: int,
+                 reference_text: str, compare_gemini: bool) -> dict:
+    global _job
+    if not content or len(content) > MAX_UPLOAD_BYTES:
+        raise ValueError("Tệp trống hoặc vượt quá 30 MiB")
+    if first_page < 1 or page_count < 1 or page_count > MAX_UPLOAD_PAGES:
+        raise ValueError("Chọn trang bắt đầu và 1–3 trang để kiểm tra")
+    if len(reference_text) > 50000:
+        raise ValueError("Bản chép đúng vượt quá 50.000 ký tự")
+    if compare_gemini and not gemini_key():
+        raise ValueError("Chưa cấu hình Gemini API key")
+    pages = _upload_pages(content, filename, first_page, page_count)
+    with _lock:
+        if _job and _job["status"] == "running":
+            raise RuntimeError("Đã có phép kiểm tra model đang chạy")
+        _job = {"id": uuid.uuid4().hex, "source": "upload", "status": "running",
+                "filename": Path(filename).name[:180],
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "settings": {"first_page": first_page, "page_count": len(pages),
+                             "compare_gemini": compare_gemini,
+                             "has_reference": bool(reference_text.strip())},
+                "completed": 0, "total": len(pages), "samples": [], "summary": []}
+        _persist(_job)
+        snapshot = json.loads(json.dumps(_job))
+        threading.Thread(target=_run_upload, args=(_job["id"], pages, reference_text.strip(),
+                                                  compare_gemini), daemon=True).start()
+        return snapshot
+
+
+def _run_upload(job_id: str, pages: list[dict], reference: str, compare_gemini: bool) -> None:
+    try:
+        for sample in pages:
+            row = {"id": sample["id"], "page_no": sample["page_no"],
+                   "kind": "uploaded_page", "local": {}}
+            for mode in ("auto", "printed", "handwritten"):
+                try:
+                    prediction, seconds, details = _ocr(sample, mode)
+                    row["local"][mode] = {"text": prediction, "seconds": round(seconds, 2), **details}
+                except Exception as error:
+                    row["local"][mode] = {"error": str(error)[:160]}
+            if compare_gemini:
+                try:
+                    prediction, seconds = _gemini(sample)
+                    row["gemini"] = {"text": prediction, "seconds": round(seconds, 2)}
+                except Exception as error:
+                    row["gemini_error"] = str(error)[:160]
+            with _lock:
+                if _job["id"] != job_id:
+                    return
+                _job["samples"].append(row)
+                _job["completed"] += 1
+                _persist(_job)
+        with _lock:
+            rows = _job["samples"]
+            summary = []
+            for mode in ("auto", "printed", "handwritten", "gemini"):
+                values = [row.get("gemini") if mode == "gemini" else row["local"].get(mode)
+                          for row in rows]
+                if any(value is None or "error" in value for value in values):
+                    continue
+                result = {"kind": "uploaded_page", "model": mode, "count": len(values),
+                          "seconds": round(statistics.median(value["seconds"] for value in values), 2),
+                          "cer": None, "wer": None}
+                if reference:
+                    metric = score(reference, "\n".join(value["text"] for value in values), 0)
+                    result.update(cer=metric["cer"], wer=metric["wer"])
+                summary.append(result)
+            if not summary:
+                _job["status"] = "failed"
+                _job["error"] = "Không model nào xử lý được các trang đã chọn"
+                _persist(_job)
+                return
+            _job["summary"] = summary
+            _job["status"] = "ready"
+            _job["finished_at"] = datetime.now(timezone.utc).isoformat()
+            _persist(_job)
+    except Exception as error:
+        with _lock:
+            _job["status"] = "failed"
+            _job["error"] = str(error)[:240]
+            _persist(_job)
 
 
 def _run(job_id: str) -> None:

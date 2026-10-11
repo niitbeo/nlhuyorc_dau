@@ -95,7 +95,7 @@ function renderJob(job) {
   const printedLines=page.lines?.filter(line=>line.recognition_mode==='printed').length||0;
   const handwrittenLines=page.lines?.filter(line=>line.recognition_mode==='handwritten').length||0;
   $('page-source').textContent=page.source==='native-pdf'?'Text có sẵn trong PDF':
-    `${page.detector==='paddle_server'?'PaddleOCR server tìm dòng · NLHUYOCR đọc':page.detector==='paddle_mobile'?'PaddleOCR mobile tìm dòng · NLHUYOCR đọc':page.detector==='simple'?'Dò dòng đơn giản · NLHUYOCR đọc':'OCR'} · ${printedLines} dòng in, ${handwrittenLines} dòng viết tay · ${page.seconds} giây`;
+    `${page.detector==='paddle_server'?'PaddleOCR bản lớn tìm dòng · NLHUYOCR đọc':page.detector==='paddle_mobile'?'PaddleOCR bản gọn tìm dòng · NLHUYOCR đọc':page.detector==='simple'?'Dò dòng đơn giản · NLHUYOCR đọc':'OCR'} · chạy offline · ${printedLines} dòng in, ${handwrittenLines} dòng viết tay · ${page.seconds} giây`;
   $('detection-warning').hidden=!page.detection_warning;
   $('detection-warning').textContent=page.detection_warning||'';
   const key=`${job.id}:${page.page_no}`;

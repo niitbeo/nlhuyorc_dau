@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import threading
 import urllib.error
 import urllib.request
@@ -42,6 +43,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="NLHUYOCR Document Archive", lifespan=lifespan)
 STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+_model_check_ocr_status: dict | None = None
 
 
 def current_user(authorization: Optional[str] = Header(None)):
@@ -156,7 +158,11 @@ def test_gemini_key(user=Depends(require_admin)):
 
 @app.get("/api/admin/model-check")
 def model_check(user=Depends(require_admin)):
+    global _model_check_ocr_status
     status = {"availability": model_eval.availability(), "latest": model_eval.latest()}
+    if status["latest"] and status["latest"]["status"] == "running" and _model_check_ocr_status:
+        status["ocr_service"] = _model_check_ocr_status
+        return status
     try:
         with urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=3) as response:
             raw = json.load(response)
@@ -166,7 +172,8 @@ def model_check(user=Depends(require_admin)):
                                  "classifier": bool(raw.get("classifier", {}).get("weights_present")),
                                  "detectors": {name: bool(item["ready"])
                                                for name, item in raw.get("detectors", {}).items()}}
-    except (urllib.error.URLError, TimeoutError, ValueError):
+        _model_check_ocr_status = status["ocr_service"]
+    except (urllib.error.URLError, TimeoutError, socket.timeout, ValueError):
         status["ocr_service"] = {"online": False}
     return status
 
@@ -175,6 +182,24 @@ def model_check(user=Depends(require_admin)):
 def start_model_check(body: ModelCheckBody, user=Depends(require_admin)):
     try:
         return model_eval.start(body.printed_count, body.handwritten_count, body.compare_gemini)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from None
+    except RuntimeError as error:
+        raise HTTPException(409, str(error)) from None
+
+
+@app.post("/api/admin/model-check/upload", status_code=202)
+async def start_uploaded_model_check(
+    file: UploadFile = File(...), first_page: int = Form(1), page_count: int = Form(1),
+    reference_text: str = Form(""), compare_gemini: bool = Form(False),
+    user=Depends(require_admin),
+):
+    content = await file.read(model_eval.MAX_UPLOAD_BYTES + 1)
+    if not content or len(content) > model_eval.MAX_UPLOAD_BYTES:
+        raise HTTPException(422, "Tệp trống hoặc vượt quá 30 MiB")
+    try:
+        return model_eval.start_upload(content, file.filename or "", first_page, page_count,
+                                       reference_text, compare_gemini)
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
     except RuntimeError as error:

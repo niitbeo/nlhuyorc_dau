@@ -2,7 +2,7 @@
 
 ## Dữ liệu và cách đo
 
-- 6 trang chữ in từ `data/NLHUY_Dataset_fast_repaired.zip`: 2 trang sạch, 2 trang scan, 2 trang scan xấu; mỗi trang có bản chép đúng. Đo toàn pipeline PaddleOCR server + NLHUYOCR chữ in.
+- 6 trang chữ in từ `data/NLHUY_Dataset_fast_repaired.zip`: 2 trang sạch, 2 trang scan, 2 trang scan xấu; mỗi trang có bản chép đúng. Đo toàn pipeline PaddleOCR bản lớn (offline) + NLHUYOCR chữ in.
 - 10 dòng chữ viết tay ở tập **test** [UIT-HWDB](https://huggingface.co/datasets/blue7012/UIT_HWDB), giấy phép CC-BY-4.0. Đo riêng lựa chọn model và nhận dạng trên từng dòng.
 - Ghép 10 dòng công khai thành một trang để kiểm tra dò dòng và nhận dạng toàn trang; đây là trang dựng để thử tích hợp, không đại diện cho công văn viết tay thật.
 - CER/WER dùng khoảng trắng chuẩn hóa và Unicode NFC, giữ nguyên chữ hoa/dấu. Thời gian là wall clock trên máy thử; lần nạp model đầu và tải máy ảnh hưởng kết quả. Gemini 3.8 Flash nhận chính những ảnh công khai/tổng hợp được so sánh.
@@ -11,7 +11,7 @@
 
 | Tập | Cấu hình | Số mẫu | CER trung bình | WER trung bình | Thời gian trung vị |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Trang in | Tự chọn + Paddle server | 6 | 11,8% | 19,2% | 12,28 s/trang |
+| Trang in | Tự chọn + PaddleOCR bản lớn | 6 | 11,8% | 19,2% | 12,28 s/trang |
 | Dòng viết tay | Tự chọn sau kiểm tra lại | 10 | 4,4% | 12,2% | 0,98 s/dòng |
 | Dòng viết tay | Buộc model viết tay | 10 | 4,4% | 12,2% | 0,45 s/dòng |
 
@@ -19,7 +19,7 @@ So trên **cùng 4 ảnh in**: OCR nội bộ CER 12,1%, trung vị 13,84 s; Gem
 
 Ban đầu bộ phân loại nhận đúng viết tay 3/10 dòng. Khi điểm phân loại dưới 0,90, thử cả hai recognizer và đổi model nếu điểm nhận dạng tăng ít nhất 0,02; sau sửa chọn đúng model viết tay 10/10 dòng test. Các ngưỡng này cần kiểm tra tiếp trên dữ liệu của trường.
 
-Trang viết tay ghép: Paddle server tìm đủ 10 dòng, OCR tự chọn CER 6,9%, WER 17,8%, 17,07 s; Gemini CER 5,0%, WER 16,4%, 6,20 s. Paddle mobile chỉ tìm 8 dòng, CER tăng lên 24,7%, nên **giữ Paddle server làm mặc định**. Trên một trang in, mobile tìm đủ 22 dòng và nhanh hơn server (9,66 s so với 13,46 s), nhưng một mẫu không đủ để đổi cấu hình chung.
+Trang viết tay ghép: PaddleOCR bản lớn tìm đủ 10 dòng, OCR tự chọn CER 6,9%, WER 17,8%, 17,07 s; Gemini CER 5,0%, WER 16,4%, 6,20 s. Bản gọn chỉ tìm 8 dòng, CER tăng lên 24,7%, nên **giữ bản lớn làm mặc định**. Trên một trang in, bản gọn tìm đủ 22 dòng và nhanh hơn bản lớn (9,66 s so với 13,46 s), nhưng một mẫu không đủ để đổi cấu hình chung.
 
 Peak RSS của tiến trình benchmark sau khi nạp model khoảng 7.247 MiB; tiến trình OCR đang phục vụ sau khi nạp hai detector khoảng 1.996 MiB RSS. Số này phụ thuộc máy, thư viện và lịch sử yêu cầu.
 
