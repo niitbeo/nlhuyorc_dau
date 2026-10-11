@@ -1,4 +1,6 @@
 import io
+import concurrent.futures
+import threading
 import time
 
 import fitz
@@ -78,6 +80,31 @@ def test_image_and_invalid_upload(tmp_path, monkeypatch):
         assert job["results"][0]["text"] == "handwritten"
         invalid = client.post("/api/jobs", files={"file": ("wrong.pdf", b"not a document", "application/pdf")})
         assert invalid.status_code == 422
+
+
+def test_ocr_request_does_not_block_homepage(tmp_path, monkeypatch):
+    monkeypatch.setattr(ocr_local, "jobs_dir", lambda: tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_recognize(image, mode, detector="auto"):
+        started.set()
+        assert release.wait(3)
+        return ([{"box": [0, 0, image.width, image.height], "text": "OK"}],
+                "simple", None)
+
+    monkeypatch.setattr(ocr_local, "recognize_image", slow_recognize)
+    buffer = io.BytesIO()
+    Image.new("RGB", (80, 40), "white").save(buffer, format="PNG")
+    with TestClient(ocr_local.app) as client, concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        task = pool.submit(client.post, "/ocr/image", files={"file": ("test.png", buffer.getvalue(), "image/png")})
+        assert started.wait(2)
+        homepage = pool.submit(client.get, "/")
+        try:
+            assert homepage.result(timeout=1).status_code == 200
+        finally:
+            release.set()
+        assert task.result(timeout=3).status_code == 200
 
 
 def test_paddle_boxes_are_rectified_and_read_in_page_order(monkeypatch):

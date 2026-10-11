@@ -22,6 +22,7 @@ import fitz
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
+from starlette.concurrency import run_in_threadpool
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
@@ -358,7 +359,8 @@ async def ocr_image(file: UploadFile = File(...), mode: str = Form("auto"),
     if image.width * image.height > 25_000_000:
         raise HTTPException(422, "Ảnh quá lớn")
     try:
-        lines, detector_used, warning = recognize_image(image, mode, detector)
+        lines, detector_used, warning = await run_in_threadpool(
+            recognize_image, image, mode, detector)
     except (FileNotFoundError, ImportError) as exc:
         raise HTTPException(503, str(exc))
     except Exception as exc:
