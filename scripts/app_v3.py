@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 
-# Thêm đường dẫn để import vietocr
+# Thêm đường dẫn tới thư viện nhận dạng OCR.
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from vietocr.tool.predictor import Predictor
@@ -298,7 +298,7 @@ def process_document(file_obj, use_finetuned, compare_gemini, api_key):
         
     stats = f"Tổng số trang xử lý: {len(images)}\n"
     stats += f"Phát hiện chữ (PaddleOCR): {total_det_time:.2f}s\n"
-    stats += f"Nhận diện chữ (VietOCR): {total_rec_time:.2f}s\n"
+    stats += f"Nhận diện chữ (NLHUYOCR): {total_rec_time:.2f}s\n"
     stats += f"Tổng thời gian: {total_det_time + total_rec_time:.2f}s\n"
     stats += f"Tổng số dòng phát hiện: {total_boxes}"
     
@@ -363,8 +363,8 @@ import os
 
 saved_api_key = os.getenv("GEMINI_API_KEY", "")
 
-with gr.Blocks(title="Bộ OCR Bộ Giáo Dục - VietOCR Finetuned") as demo:
-    gr.Markdown("# Hệ thống OCR phân rã PDF - Đánh giá tốc độ và độ chính xác")
+with gr.Blocks(title="NLHUYOCR · Nhận dạng tiếng Việt") as demo:
+    gr.Markdown("# NLHUYOCR · Đánh giá tốc độ và độ chính xác")
     
     with gr.Row():
         file_input = gr.File(label="Tải lên PDF hoặc Ảnh (JPG/PNG)")

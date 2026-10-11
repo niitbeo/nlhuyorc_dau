@@ -57,7 +57,7 @@ def install_model(choice: str) -> None:
     if not archive.is_file():
         url = f"{MODEL_BASE_URL}/{model_name}.tar"
         print(f"Downloading {url}")
-        request = urllib.request.Request(url, headers={"User-Agent": "NLHUY-OCR-setup/1.0"})
+        request = urllib.request.Request(url, headers={"User-Agent": "NLHUYOCR-setup/1.0"})
         with urllib.request.urlopen(request, timeout=90) as source, archive.open("wb") as target:
             digest = hashlib.sha256()
             total = 0

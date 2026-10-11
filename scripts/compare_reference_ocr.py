@@ -1,12 +1,12 @@
-"""So sánh tham chiếu: PaddleOCR phát hiện dòng + VietOCR nhận dạng (model tiếng Việt có sẵn).
+"""So sánh tham chiếu: PaddleOCR phát hiện dòng + model nhận dạng gốc có sẵn.
 
 Dùng lại box đã lưu trong lines.json của baseline_ocr.py (cùng phát hiện -> chỉ khác bộ nhận dạng),
 nên kết quả phản ánh đúng chênh lệch giữa 2 model nhận dạng.
 
-Chạy (trong venv riêng .venv-vietocr):
-  .venv-vietocr\\Scripts\\python scripts/compare_vietocr.py ^
+Chạy trong môi trường có cài dependency OCR:
+  python scripts/compare_reference_ocr.py ^
       --input data/synthetic --paddle-results results/synthetic/latin_PP-OCRv5_mobile_rec ^
-      --out results/synthetic/vietocr_vgg_transformer
+      --out results/synthetic/reference_vgg_transformer
 """
 import argparse
 import csv
@@ -88,7 +88,7 @@ def main():
         for r in rows:
             if "CER" in r:
                 groups.setdefault(Path(r["trang"]).parts[0], []).append(r)
-        md = [f"# VietOCR ({args.config}, {args.device}) trên box của PaddleOCR\n",
+        md = [f"# Model OCR tham chiếu ({args.config}, {args.device}) trên box của PaddleOCR\n",
               "| Nhóm | Số trang | CER % | WER % | CER không dấu % | Giây/trang |", "|---|---|---|---|---|---|"]
         for g, rs in groups.items():
             avg = lambda k: round(float(np.mean([x[k] for x in rs])), 2)  # noqa: E731

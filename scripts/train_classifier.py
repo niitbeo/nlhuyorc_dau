@@ -13,7 +13,7 @@ def main():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     
     # Image transformations
-    # Images in VietOCR are height 32, so we scale them slightly
+    # NLHUYOCR line images are height 32, so we scale them slightly.
     data_transforms = {
         'train': transforms.Compose([
             transforms.Resize((64, 256)),

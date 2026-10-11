@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NLHUY OCR · Nhận dạng tài liệu</title>
+  <title>NLHUYOCR · Nhận dạng tài liệu</title>
   <link rel="stylesheet" href="/ocr.css">
   <script src="/ocr.js" defer></script>
 </head>
 <body>
   <header class="site-header">
     <div class="header-inner">
-      <a class="brand" href="/"><span class="brand-mark">N</span><span><strong>NLHUY OCR</strong><small>Trường Đại học Kiến trúc Đà Nẵng</small></span></a>
+      <a class="brand" href="/"><span class="brand-mark">N</span><span><strong>NLHUYOCR</strong><small>Trường Đại học Kiến trúc Đà Nẵng</small></span></a>
       <nav aria-label="Điều hướng"><a class="current" href="/">Nhận dạng</a><a href="http://127.0.0.1:8001/">Kho tài liệu ↗</a></nav>
       <span class="local-badge"><span class="status-dot"></span> Chạy nội bộ</span>
     </div>
@@ -19,7 +19,7 @@
   <main>
     <section class="intro">
       <div><span class="eyebrow">KHÔNG DÙNG API BÊN NGOÀI</span><h1>Nhận dạng tài liệu tiếng Việt</h1>
-        <p>PaddleOCR tìm vùng chữ, VietOCR đọc tiếng Việt. Tải PDF hoặc ảnh, xem và sửa kết quả từng trang trước khi xuất văn bản.</p></div>
+        <p>PaddleOCR tìm vùng chữ, NLHUYOCR đọc chữ in và chữ viết tay tiếng Việt. Tải PDF hoặc ảnh, xem và sửa kết quả từng trang trước khi xuất văn bản.</p></div>
       <div class="intro-metric"><strong>PDF + Ảnh</strong><span>Hỗ trợ nhiều trang</span></div>
     </section>
 
@@ -36,9 +36,9 @@
           <div id="file-summary" class="file-summary" hidden><span class="file-symbol">▤</span><span><strong id="file-name"></strong><small id="file-size"></small></span></div>
 
           <fieldset><legend>Kiểu chữ</legend><div class="mode-options">
-            <label class="mode-option"><input type="radio" name="mode" value="auto" checked><span><strong>Tự nhận dạng</strong><small>Chọn chữ in hoặc viết tay theo từng dòng</small></span></label>
-            <label class="mode-option"><input type="radio" name="mode" value="printed"><span><strong>Chữ in</strong><small>Buộc dùng model chữ in</small></span></label>
-            <label class="mode-option"><input type="radio" name="mode" value="handwritten"><span><strong>Chữ viết tay</strong><small>Buộc dùng model chữ viết tay</small></span></label>
+            <label class="mode-option"><input type="radio" name="mode" value="auto" checked><span><strong>Tự nhận dạng</strong><small>NLHUYOCR chọn model theo từng dòng</small></span></label>
+            <label class="mode-option"><input type="radio" name="mode" value="printed"><span><strong>Chữ in</strong><small>NLHUYOCR chữ in</small></span></label>
+            <label class="mode-option"><input type="radio" name="mode" value="handwritten"><span><strong>Chữ viết tay</strong><small>NLHUYOCR chữ viết tay</small></span></label>
           </div></fieldset>
           <label class="detector-select">Tìm dòng chữ
             <select name="detector"><option value="auto">PaddleOCR chính xác (mặc định)</option><option value="paddle_server">PaddleOCR server · ưu tiên độ chính xác</option><option value="paddle_mobile">PaddleOCR mobile · xử lý nhanh</option><option value="simple">Dò dòng đơn giản</option></select>

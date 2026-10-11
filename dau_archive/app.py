@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
         thread.join(timeout=3)
 
 
-app = FastAPI(title="NLHUY DAU Document Archive", lifespan=lifespan)
+app = FastAPI(title="NLHUYOCR Document Archive", lifespan=lifespan)
 STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 

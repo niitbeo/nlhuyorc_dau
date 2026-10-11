@@ -111,7 +111,7 @@ def examples(printed_limit: int, handwriting_limit: int):
 
 
 def run(args):
-    report = {"dataset": "NLHUY synthetic printed pages + UIT-HWDB test handwriting lines",
+    report = {"dataset": "NLHUYOCR synthetic printed pages + UIT-HWDB test handwriting lines",
               "gemini_model": args.model if args.gemini else None, "samples": []}
     gemini_counts = {"printed_page": 0, "handwritten_line": 0}
     for sample in examples(args.printed_limit, args.handwriting_limit):

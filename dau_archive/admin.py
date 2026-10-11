@@ -10,7 +10,7 @@ from .db import init_db
 
 
 def main():
-    parser = argparse.ArgumentParser(description="NLHUY DAU document archive administration")
+    parser = argparse.ArgumentParser(description="NLHUYOCR document archive administration")
     sub = parser.add_subparsers(dest="command", required=True)
     user = sub.add_parser("create-user")
     user.add_argument("username")

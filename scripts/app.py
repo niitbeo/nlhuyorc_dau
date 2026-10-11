@@ -11,7 +11,7 @@ import sys
 from docreconstruct.reconstruction.hybrid_job import run_hybrid_job
 from pathlib import Path
 
-# Thêm đường dẫn để import vietocr
+# Thêm đường dẫn tới thư viện nhận dạng OCR.
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from vietocr.tool.predictor import Predictor
@@ -19,15 +19,17 @@ from vietocr.tool.config import Cfg
 
 # Global predictor
 predictor = None
+model_label = "NLHUYOCR"
 
 def load_model(weight_path):
-    global predictor
+    global predictor, model_label
     config = Cfg.load_config_from_name('vgg_transformer')
     config['weights'] = weight_path
     config['cnn']['pretrained'] = False
     config['device'] = 'cuda:0'
     config['predictor']['beamsearch'] = False
     predictor = Predictor(config)
+    model_label = "Model gốc" if str(weight_path).startswith("http") else "NLHUYOCR"
 
 def get_boxes_from_paddle(img_path):
     cmd = [
@@ -187,7 +189,7 @@ def process_document(file_obj, use_finetuned):
         
     stats = f"Tổng số trang xử lý: {len(images)}\n"
     stats += f"Phát hiện chữ (PaddleOCR): {total_det_time:.2f}s\n"
-    stats += f"Nhận diện chữ (VietOCR): {total_rec_time:.2f}s\n"
+    stats += f"Nhận diện chữ ({model_label}): {total_rec_time:.2f}s\n"
     stats += f"Tổng thời gian: {total_det_time + total_rec_time:.2f}s\n"
     stats += f"Tổng số dòng phát hiện: {total_boxes}"
     
@@ -218,8 +220,8 @@ def process_document(file_obj, use_finetuned):
     
     return all_vis_imgs, all_full_text, stats, out_docx_path
 
-with gr.Blocks(title="Bộ OCR Bộ Giáo Dục - VietOCR Finetuned") as demo:
-    gr.Markdown("# Hệ thống OCR phân rã PDF - Đánh giá tốc độ và độ chính xác")
+with gr.Blocks(title="NLHUYOCR · Nhận dạng tiếng Việt") as demo:
+    gr.Markdown("# NLHUYOCR · Đánh giá tốc độ và độ chính xác")
     
     with gr.Row():
         file_input = gr.File(label="Tải lên PDF hoặc Ảnh (JPG/PNG)")

@@ -9,13 +9,13 @@ import numpy as np
 from PIL import Image
 import io
 
-# Add vietocr path
+# Add the OCR recognition library path.
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from vietocr.tool.predictor import Predictor
 from vietocr.tool.config import Cfg
 from transformers import PreTrainedTokenizerFast, AutoModelForSeq2SeqLM
 
-app = FastAPI(title="DAU-ERP AI Core API")
+app = FastAPI(title="NLHUYOCR API")
 
 # --- 1. Load OCR Model (Quantized Int8 or FP32) ---
 print("[INFO] Đang nạp mô hình OCR...")
@@ -24,7 +24,7 @@ config['device'] = 'cpu' # Deploy trên CPU sau khi ép cân, hoặc 'cuda:0' n�
 config['weights'] = r'd:\orc\weights\handwriting_pro_quantized.pth' # Dùng bản ép cân cho nhẹ
 config['dataset']['image_max_width'] = 2048
 # Note: Để nạp bản quantized, ta cần định nghĩa lại model structure rồi load weights, 
-# nhưng tạm thời Predictor của VietOCR tự build model gốc. 
+# nhưng predictor của thư viện nhận dạng vẫn dựng cấu trúc model gốc.
 # Do đó, để an toàn và nhanh nhất, ta cứ dùng bản gốc trên GPU cho API này.
 config['device'] = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 config['weights'] = r'd:\orc\weights\handwriting_pro.pth'
@@ -66,5 +66,5 @@ async def process_image(file: UploadFile = File(...)):
     return OCRResponse(raw_text=raw_text, corrected_text=corrected)
 
 if __name__ == "__main__":
-    print("🚀 DAU-ERP AI Core API đang chạy tại http://0.0.0.0:8000")
+    print("🚀 NLHUYOCR API đang chạy tại http://0.0.0.0:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000)

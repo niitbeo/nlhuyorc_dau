@@ -2,7 +2,7 @@
 
 ## Dữ liệu và cách đo
 
-- 6 trang chữ in từ `data/NLHUY_Dataset_fast_repaired.zip`: 2 trang sạch, 2 trang scan, 2 trang scan xấu; mỗi trang có bản chép đúng. Đo toàn pipeline PaddleOCR server + VietOCR.
+- 6 trang chữ in từ `data/NLHUY_Dataset_fast_repaired.zip`: 2 trang sạch, 2 trang scan, 2 trang scan xấu; mỗi trang có bản chép đúng. Đo toàn pipeline PaddleOCR server + NLHUYOCR chữ in.
 - 10 dòng chữ viết tay ở tập **test** [UIT-HWDB](https://huggingface.co/datasets/blue7012/UIT_HWDB), giấy phép CC-BY-4.0. Đo riêng lựa chọn model và nhận dạng trên từng dòng.
 - Ghép 10 dòng công khai thành một trang để kiểm tra dò dòng và nhận dạng toàn trang; đây là trang dựng để thử tích hợp, không đại diện cho công văn viết tay thật.
 - CER/WER dùng khoảng trắng chuẩn hóa và Unicode NFC, giữ nguyên chữ hoa/dấu. Thời gian là wall clock trên máy thử; lần nạp model đầu và tải máy ảnh hưởng kết quả. Gemini 3.8 Flash nhận chính những ảnh công khai/tổng hợp được so sánh.

@@ -1,4 +1,4 @@
-"""Local document OCR service using the project's trained VietOCR weights."""
+"""Local document OCR service using the project's trained NLHUYOCR weights."""
 from __future__ import annotations
 
 import io
@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from .text_quality import looks_garbled_vietnamese
 
 
-app = FastAPI(title="NLHUY OCR tài liệu")
+app = FastAPI(title="NLHUYOCR tài liệu")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODEL_FILES = {
     "printed": "transformerocr_finetuned.pth",
@@ -362,7 +362,7 @@ async def ocr_image(file: UploadFile = File(...), mode: str = Form("auto"),
     except (FileNotFoundError, ImportError) as exc:
         raise HTTPException(503, str(exc))
     except Exception as exc:
-        raise HTTPException(500, f"VietOCR không đọc được ảnh: {exc}")
+        raise HTTPException(500, f"NLHUYOCR không đọc được ảnh: {exc}")
     text = "\n".join(line["text"] for line in lines)
     return {"mode": mode, "detector": detector_used, "detection_warning": warning,
             "image_size": [image.width, image.height],
