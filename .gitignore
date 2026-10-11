@@ -1,0 +1,16 @@
+data/
+weights/
+models/
+__pycache__/
+.pytest_cache/
+.venv/
+*.py[cod]
+*.sqlite3*
+*.tar.gz
+frontend/node_modules/
+.env
+.env.*
+!.env.example
+gemini_api_key.txt
+*.pem
+*.key

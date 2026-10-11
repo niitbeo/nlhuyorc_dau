@@ -1,0 +1,5 @@
+-r requirements-archive.txt
+torch==2.2.1
+torchvision==0.17.1
+vietocr==0.3.13
+opencv-python>=4.8,<5

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NLHUY OCR · Nhận dạng tài liệu</title>
+  <link rel="stylesheet" href="/ocr.css">
+  <script src="/ocr.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/"><span class="brand-mark">N</span><span><strong>NLHUY OCR</strong><small>Trường Đại học Kiến trúc Đà Nẵng</small></span></a>
+      <nav aria-label="Điều hướng"><a class="current" href="/">Nhận dạng</a><a href="http://127.0.0.1:8001/">Kho tài liệu ↗</a></nav>
+      <span class="local-badge"><span class="status-dot"></span> Chạy nội bộ</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="intro">
+      <div><span class="eyebrow">KHÔNG DÙNG API BÊN NGOÀI</span><h1>Nhận dạng tài liệu tiếng Việt</h1>
+        <p>PaddleOCR tìm vùng chữ, VietOCR đọc tiếng Việt. Tải PDF hoặc ảnh, xem và sửa kết quả từng trang trước khi xuất văn bản.</p></div>
+      <div class="intro-metric"><strong>PDF + Ảnh</strong><span>Hỗ trợ nhiều trang</span></div>
+    </section>
+
+    <div class="workspace">
+      <section class="panel input-panel" aria-labelledby="input-title">
+        <div class="panel-heading"><div><span class="step">01</span><h2 id="input-title">Tài liệu đầu vào</h2></div><button id="new-job" class="quiet" type="button">Tạo lượt mới</button></div>
+        <form id="ocr-form">
+          <label class="dropzone" id="dropzone">
+            <span class="upload-icon" aria-hidden="true">↑</span>
+            <strong>Chọn hoặc kéo thả tài liệu</strong>
+            <span>PDF, PNG, JPG, TIFF · PDF tối đa 200 MiB</span>
+            <input id="source-file" type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,application/pdf,image/*" required>
+          </label>
+          <div id="file-summary" class="file-summary" hidden><span class="file-symbol">▤</span><span><strong id="file-name"></strong><small id="file-size"></small></span></div>
+
+          <fieldset><legend>Kiểu chữ</legend><div class="mode-options">
+            <label class="mode-option"><input type="radio" name="mode" value="auto" checked><span><strong>Tự nhận dạng</strong><small>Chọn chữ in hoặc viết tay theo từng dòng</small></span></label>
+            <label class="mode-option"><input type="radio" name="mode" value="printed"><span><strong>Chữ in</strong><small>Buộc dùng model chữ in</small></span></label>
+            <label class="mode-option"><input type="radio" name="mode" value="handwritten"><span><strong>Chữ viết tay</strong><small>Buộc dùng model chữ viết tay</small></span></label>
+          </div></fieldset>
+          <label class="detector-select">Tìm dòng chữ
+            <select name="detector"><option value="auto">PaddleOCR chính xác (mặc định)</option><option value="paddle_server">PaddleOCR server · ưu tiên độ chính xác</option><option value="paddle_mobile">PaddleOCR mobile · xử lý nhanh</option><option value="simple">Dò dòng đơn giản</option></select>
+          </label>
+
+          <details class="settings"><summary>Tùy chọn PDF</summary><div class="settings-grid">
+            <label>Trang bắt đầu<input type="number" name="start_page" min="1" value="1"></label>
+            <label>Trang kết thúc<input type="number" name="end_page" min="1" placeholder="Trang cuối"></label>
+          </div><label class="select-label">Cách xử lý
+            <select name="text_mode"><option value="auto">Dùng text gốc nếu PDF đã có chữ</option><option value="force_ocr">Luôn nhận dạng từ hình ảnh trang</option></select>
+          </label><p>Để trống trang kết thúc để xử lý toàn bộ PDF. Tối đa 500 trang mỗi lượt.</p></details>
+          <button id="submit" class="primary" type="submit"><span>Nhận dạng tài liệu</span><span aria-hidden="true">→</span></button>
+        </form>
+        <div class="preview-heading"><h3>Trang gốc</h3><div class="preview-controls"><label id="boxes-toggle" hidden><input id="show-boxes" type="checkbox" checked> Hiện khung chữ</label><span id="preview-label">Chưa chọn tài liệu</span></div></div>
+        <div class="preview-frame" id="preview-frame"><div class="preview-empty"><span>▣</span><p>Bản xem trước sẽ xuất hiện tại đây</p></div></div>
+      </section>
+
+      <section class="panel result-panel" aria-labelledby="result-title">
+        <div class="panel-heading"><div><span class="step">02</span><h2 id="result-title">Kết quả nhận dạng</h2></div><span id="result-status" class="pill">Sẵn sàng</span></div>
+        <div id="empty-result" class="empty-result"><div class="empty-glyph">Aa</div><h3>Text sẽ hiện theo từng trang</h3><p>Chọn PDF hoặc ảnh ở bên trái rồi bắt đầu nhận dạng. Bạn có thể sửa kết quả trước khi tải về.</p></div>
+        <div id="job-result" hidden>
+          <div class="progress-block"><div class="progress-line"><strong id="progress-title">Đang chuẩn bị</strong><span id="progress-count">0/0 trang</span></div><div class="progress-track"><div id="progress-bar"></div></div><p id="progress-detail"></p></div>
+          <div class="result-tools"><div><h3 id="result-file-name"></h3><p id="result-summary"></p></div><div class="tool-actions"><a id="download-txt" class="tool-button" href="#" download>Tải TXT</a><a id="download-json" class="tool-button" href="#" download>JSON</a></div></div>
+          <div id="page-tabs" class="page-tabs" role="tablist" aria-label="Chọn trang"></div>
+          <div id="page-content" class="page-content" hidden>
+            <div class="page-meta"><strong id="page-title"></strong><span id="page-source"></span></div>
+            <p id="detection-warning" class="detection-warning" hidden></p>
+            <label for="page-text">Văn bản nhận dạng</label>
+            <textarea id="page-text" spellcheck="false" rows="18"></textarea>
+            <div class="edit-actions"><button id="save-page" type="button">Lưu chỉnh sửa</button><button id="copy-page" class="quiet" type="button">Sao chép trang</button><span id="edit-status" role="status"></span></div>
+          </div>
+          <p id="job-error" class="job-error" hidden></p>
+        </div>
+      </section>
+    </div>
+
+    <section class="history panel"><div class="panel-heading"><div><span class="step">03</span><h2>Lượt xử lý gần đây</h2></div><button id="refresh-history" class="quiet" type="button">Làm mới</button></div><div id="history-list"></div></section>
+    <p id="notice" role="status"></p>
+  </main>
+</body>
+</html>
