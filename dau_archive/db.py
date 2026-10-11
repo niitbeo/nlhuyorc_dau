@@ -51,6 +51,26 @@ CREATE TABLE IF NOT EXISTS documents (
  owner_id TEXT NOT NULL REFERENCES users(id), current_version_id TEXT,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS import_batches (
+ id TEXT PRIMARY KEY, source_name TEXT NOT NULL, source_path TEXT NOT NULL,
+ owner_id TEXT NOT NULL REFERENCES users(id), department TEXT NOT NULL,
+ visibility TEXT NOT NULL CHECK(visibility IN ('public','department','restricted')),
+ kind_hint TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'queued'
+  CHECK(status IN ('queued','importing','ready','failed')),
+ total_entries INTEGER NOT NULL DEFAULT 0, imported_entries INTEGER NOT NULL DEFAULT 0,
+ skipped_entries INTEGER NOT NULL DEFAULT 0, error TEXT,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS import_batch_entries (
+ id TEXT PRIMARY KEY, document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+ batch_id TEXT NOT NULL REFERENCES import_batches(id) ON DELETE CASCADE,
+ archive_path TEXT NOT NULL, collection_key TEXT NOT NULL,
+ source_role TEXT NOT NULL, status TEXT NOT NULL
+  CHECK(status IN ('imported','skipped')),
+ error TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(batch_id,archive_path)
+);
 CREATE TABLE IF NOT EXISTS grants (
  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -112,6 +132,9 @@ CREATE INDEX IF NOT EXISTS idx_versions_document ON versions(document_id,version
 CREATE INDEX IF NOT EXISTS idx_pages_version ON pages(version_id,page_no);
 CREATE INDEX IF NOT EXISTS idx_chunks_version ON chunks(version_id,page_no);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status,created_at);
+CREATE INDEX IF NOT EXISTS idx_import_batches_status ON import_batches(status,created_at);
+CREATE INDEX IF NOT EXISTS idx_import_batch_entries_doc ON import_batch_entries(document_id);
+CREATE INDEX IF NOT EXISTS idx_import_batch_entries_collection ON import_batch_entries(batch_id,collection_key);
 """
 
 
@@ -119,6 +142,15 @@ def init_db() -> None:
     with connect() as db:
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript(SCHEMA)
+        existing = {row["name"] for row in db.execute("PRAGMA table_info(documents)")}
+        for name, definition in {
+            "subtype": "TEXT NOT NULL DEFAULT ''",
+            "classification_status": "TEXT NOT NULL DEFAULT 'confirmed'",
+            "classification_confidence": "REAL",
+            "classification_evidence": "TEXT NOT NULL DEFAULT ''",
+        }.items():
+            if name not in existing:
+                db.execute(f"ALTER TABLE documents ADD COLUMN {name} {definition}")
 
 
 def audit(db: sqlite3.Connection, actor_id: str | None, action: str,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import shutil
 import threading
 import urllib.error
 import urllib.request
@@ -12,15 +13,18 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import auth
 from . import model_eval
+from . import batch_import
+from .classify import KINDS, ISO_ROLES
 from .db import audit, connect, data_dir, init_db
 from .embeddings import available as embeddings_available, model_id
 from .processing import reindex_embeddings, save_blob
+from .processing import ALLOWED_EXTENSIONS
 from .search import _acl, search
 from .secrets import delete_gemini_key, gemini_key, gemini_key_source, save_gemini_key
 from .worker import serve
@@ -31,13 +35,18 @@ async def lifespan(app: FastAPI):
     init_db()
     stop = threading.Event()
     thread = None
+    batch_thread = None
     if os.getenv("DAU_RUN_WORKER", "1") == "1":
         thread = threading.Thread(target=serve, args=(stop,), daemon=True)
         thread.start()
+        batch_thread = threading.Thread(target=batch_import.serve, args=(stop,), daemon=True)
+        batch_thread.start()
     yield
     stop.set()
     if thread:
         thread.join(timeout=3)
+    if batch_thread:
+        batch_thread.join(timeout=3)
 
 
 app = FastAPI(title="NLHUYOCR Document Archive", lifespan=lifespan)
@@ -91,6 +100,16 @@ class GrantBody(BaseModel):
 class DocumentUpdateBody(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     visibility: str = Field(pattern="^(public|department|restricted)$")
+    kind: Optional[str] = Field(default=None, pattern="^(incoming|outgoing|iso|curriculum|lesson|other)$")
+    subtype: Optional[str] = Field(default=None, pattern="^(procedure|form|reference|guide|regulation|other|)$")
+    department: Optional[str] = Field(default=None, min_length=1, max_length=120)
+
+
+def _batch_for(batch_id: str, user) -> dict:
+    result = batch_import.batch_status(batch_id, user)
+    if not result:
+        raise HTTPException(404, "Không tìm thấy đợt nhập")
+    return result
 
 
 class GeminiKeyBody(BaseModel):
@@ -298,6 +317,82 @@ def create_document(file: UploadFile = File(...), kind: str = Form(...), title: 
     return {"document_id": doc_id, "version_id": version_id, "job_id": job_id}
 
 
+@app.post("/api/import-batches", status_code=202)
+async def create_import_batch(
+    files: list[UploadFile] = File(...), department: str = Form(...),
+    visibility: str = Form("department"), kind_hint: str = Form(""),
+    derive_department: bool = Form(False), user=Depends(current_user),
+):
+    if not files or len(files) > batch_import.MAX_BATCH_FILES:
+        raise HTTPException(422, "Chọn từ 1 đến 200 tệp")
+    if not department.strip() or len(department) > 120:
+        raise HTTPException(422, "Đơn vị không hợp lệ")
+    if user["role"] != "admin" and (department != user["department"] or derive_department):
+        raise HTTPException(403, "Chỉ quản trị viên được chọn đơn vị khác")
+    if visibility not in {"public", "department", "restricted"} or kind_hint not in {"", "iso"}:
+        raise HTTPException(422, "Cấu hình đợt nhập không hợp lệ")
+    batch_id = str(uuid.uuid4())
+    folder = data_dir() / "batch_sources" / batch_id
+    folder.mkdir(parents=True, exist_ok=True)
+    staged = []
+    total = 0
+    try:
+        for index, file in enumerate(files):
+            name = Path(file.filename or "").name
+            if not name or Path(name).suffix.lower() not in ALLOWED_EXTENSIONS | {".zip", ".rar"}:
+                raise HTTPException(422, f"Định dạng không hỗ trợ: {name or 'tệp không tên'}")
+            destination = folder / f"{index:04d}-{name}"
+            count = 0
+            with destination.open("wb") as target:
+                while chunk := await file.read(1024 * 1024):
+                    count += len(chunk)
+                    total += len(chunk)
+                    if total > batch_import.MAX_BATCH_BYTES:
+                        raise HTTPException(413, "Đợt nhập vượt quá 1,5 GiB")
+                    if Path(name).suffix.lower() not in {".zip", ".rar"} and count > 50 * 1024 * 1024:
+                        raise HTTPException(413, "Mỗi tệp rời tối đa 50 MiB")
+                    target.write(chunk)
+            if count == 0:
+                raise HTTPException(422, f"Tệp trống: {name}")
+            staged.append((name, destination))
+        batch_import.create_batch(user["id"], ", ".join(name for name, _ in staged)[:300],
+                                  staged, department, visibility, kind_hint,
+                                  derive_department, batch_id=batch_id)
+    except Exception:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    return _batch_for(batch_id, user)
+
+
+@app.get("/api/import-batches")
+def list_import_batches(user=Depends(current_user), limit: int = 20):
+    limit = max(1, min(limit, 100))
+    with connect() as db:
+        rows = db.execute(
+            "SELECT id FROM import_batches WHERE owner_id=? OR ?='admin' "
+            "ORDER BY created_at DESC,rowid DESC LIMIT ?",
+            (user["id"], user["role"], limit),
+        ).fetchall()
+    return [_batch_for(row["id"], user) for row in rows]
+
+
+@app.get("/api/import-batches/{batch_id}")
+def get_import_batch(batch_id: str, user=Depends(current_user)):
+    return _batch_for(batch_id, user)
+
+
+@app.post("/api/import-batches/{batch_id}/retry", status_code=202)
+def retry_import_batch(batch_id: str, user=Depends(current_user)):
+    batch = _batch_for(batch_id, user)
+    if batch["status"] != "failed":
+        raise HTTPException(409, "Chỉ chạy lại đợt nhập bị lỗi")
+    with connect() as db:
+        db.execute("UPDATE import_batches SET status='queued',error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                   (batch_id,))
+        audit(db, user["id"], "batch.retry", detail=batch_id)
+    return _batch_for(batch_id, user)
+
+
 @app.post("/api/documents/{document_id}/versions", status_code=202)
 def add_version(document_id: str, file: UploadFile = File(...),
                 ocr_pages_json: Optional[str] = Form(None), user=Depends(current_user)):
@@ -336,11 +431,15 @@ def job_status(job_id: str, user=Depends(current_user)):
 
 @app.get("/api/documents")
 def list_documents(user=Depends(current_user), limit: int = 100):
-    limit = max(1, min(limit, 500))
+    limit = max(1, min(limit, 2000))
     acl_sql, acl_params = _acl(user)
     with connect() as db:
         rows = db.execute(
-            f"SELECT d.* FROM documents d WHERE {acl_sql} ORDER BY d.created_at DESC,d.rowid DESC LIMIT ?",
+            f"SELECT d.*,(SELECT e.collection_key FROM import_batch_entries e "
+            f"WHERE e.document_id=d.id LIMIT 1) AS collection_key,"
+            f"(SELECT e.archive_path FROM import_batch_entries e "
+            f"WHERE e.document_id=d.id LIMIT 1) AS archive_path "
+            f"FROM documents d WHERE {acl_sql} ORDER BY d.created_at DESC,d.rowid DESC LIMIT ?",
             (*acl_params, limit),
         ).fetchall()
         return [dict(row) for row in rows]
@@ -376,9 +475,13 @@ def get_document(document_id: str, version_id: Optional[str] = None, user=Depend
             "SELECT u.id,u.username,u.department FROM grants g JOIN users u ON u.id=g.user_id "
             "WHERE g.document_id=? ORDER BY u.username", (document_id,)
         )] if auth.can_write(user, doc) else []
+        sources = [dict(row) for row in db.execute(
+            "SELECT batch_id,archive_path,collection_key,source_role FROM import_batch_entries "
+            "WHERE document_id=? ORDER BY created_at", (document_id,)
+        )]
         return {"document": dict(doc), "selected_version_id": selected_version,
                 "versions": versions, "pages": pages,
-                "fields": fields, "relations": relations, "grants": grants}
+                "fields": fields, "relations": relations, "grants": grants, "sources": sources}
 
 
 @app.patch("/api/documents/{document_id}")
@@ -386,12 +489,54 @@ def update_document(document_id: str, body: DocumentUpdateBody, user=Depends(cur
     if not body.title.strip():
         raise HTTPException(422, "Tiêu đề không hợp lệ")
     with connect() as db:
-        document_for(db, document_id, user, write=True)
-        db.execute("UPDATE documents SET title=?,visibility=? WHERE id=?",
-                   (body.title.strip(), body.visibility, document_id))
+        doc = document_for(db, document_id, user, write=True)
+        department = (body.department or doc["department"]).strip()
+        if user["role"] != "admin" and department != doc["department"]:
+            raise HTTPException(403, "Chỉ quản trị viên được đổi đơn vị")
+        kind = body.kind or doc["kind"]
+        subtype = body.subtype if body.subtype is not None else doc["subtype"]
+        if kind != "iso":
+            subtype = ""
+        db.execute("UPDATE documents SET title=?,visibility=?,kind=?,subtype=?,department=?,"
+                   "classification_status='confirmed',classification_confidence=1.0,"
+                   "classification_evidence='Người phụ trách xác nhận' WHERE id=?",
+                   (body.title.strip(), body.visibility, kind, subtype, department, document_id))
         audit(db, user["id"], "document.update", document_id,
-              json.dumps({"title": body.title.strip(), "visibility": body.visibility}, ensure_ascii=False))
+              json.dumps({"title": body.title.strip(), "visibility": body.visibility,
+                          "kind": kind, "subtype": subtype, "department": department}, ensure_ascii=False))
     return {"ok": True}
+
+
+@app.get("/api/documents/{document_id}/export")
+def export_document(document_id: str, format: str = "txt", user=Depends(current_user)):
+    if format not in {"txt", "json"}:
+        raise HTTPException(422, "Chỉ hỗ trợ TXT hoặc JSON")
+    with connect() as db:
+        doc = document_for(db, document_id, user)
+        version_id = doc["current_version_id"]
+        if not version_id:
+            raise HTTPException(409, "Chưa có nội dung đã xử lý")
+        pages = [dict(row) for row in db.execute(
+            "SELECT page_no,text,source FROM pages WHERE version_id=? ORDER BY page_no", (version_id,))]
+        fields = [dict(row) for row in db.execute(
+            "SELECT field_key,value,page_no,evidence,status FROM fields WHERE version_id=? "
+            "ORDER BY page_no,field_key", (version_id,))]
+        sources = [dict(row) for row in db.execute(
+            "SELECT batch_id,archive_path,collection_key,source_role FROM import_batch_entries "
+            "WHERE document_id=?", (document_id,))]
+        audit(db, user["id"], "document.export", document_id, format)
+    if format == "txt":
+        content = "\n\n".join(f"--- Trang {page['page_no']} ---\n{page['text']}" for page in pages)
+        media = "text/plain; charset=utf-8"
+    else:
+        content = json.dumps({"document": {"id": doc["id"], "title": doc["title"],
+                                             "kind": doc["kind"], "subtype": doc["subtype"],
+                                             "department": doc["department"]},
+                              "version_id": version_id, "sources": sources, "pages": pages,
+                              "fields": fields}, ensure_ascii=False, indent=2)
+        media = "application/json; charset=utf-8"
+    return Response(content=content, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{document_id}.{format}"'})
 
 
 @app.get("/api/documents/{document_id}/download")

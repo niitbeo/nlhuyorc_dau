@@ -49,6 +49,21 @@ Kết quả phép đo hiện tại và giới hạn của bộ mẫu: [docs/ocr-
 - Giao diện OCR xử lý PDF hoặc ảnh, báo tiến độ theo trang, cho xem trang gốc, sửa kết quả và xuất TXT/JSON. Lượt xử lý cùng tệp gốc nằm tại `DAU_DATA_DIR/ocr_jobs/`, nên vẫn xem lại được sau khi khởi động lại. Mỗi lượt cho chọn tối đa 500 trang, PDF tối đa 200 MiB, ảnh tối đa 50 MiB. Mặc định hệ thống phân loại **từng dòng** là chữ in hoặc viết tay bằng `weights/text_classifier.pth` rồi chọn model NLHUYOCR tương ứng. Dòng có điểm phân loại dưới 0,90 được thử thêm bằng model còn lại; chỉ đổi model khi điểm nhận dạng cao hơn tối thiểu 0,02. Có thể buộc một loại chữ trên giao diện hoặc qua `DAU_OCR_MODE`. Nếu OCR thiếu hoặc lỗi, tác vụ được đánh dấu thất bại và giữ bản gốc để xử lý lại.
 - Kho hồ sơ nhận bản tải lên tối đa 50 MiB và OCR JSON tối đa 1.000 trang. Các đề xuất metadata dùng quy tắc tiếng Việt cho số văn bản, ngày ký, người ký, nơi gửi/nhận, mã ISO, ngày hiệu lực, học phần và năm học. Có thể gắn thêm model NER **đã tải tại máy** qua `DAU_NER_MODEL_PATH`.
 
+## Nhập loạt tài liệu và phân loại
+
+Màn hình **Nhập tài liệu → Nhập hàng loạt** nhận nhiều tệp PDF, Word, Excel, ảnh, TXT/Markdown hoặc ZIP/RAR (tối đa 200 tệp, 1,5 GiB mỗi đợt). Một tệp rời hoặc tệp bên trong archive tối đa 50 MiB. Sau khi tải lên, đợt nhập chạy nền, giữ đường dẫn gốc, phân loại sơ bộ và tạo hàng đợi trích chữ/OCR. Tệp tạm của Office bị bỏ qua; lỗi từng tệp được liệt kê ngay trong đợt nhập. Hệ thống lưu tệp theo SHA-256 nên các bản trùng byte dùng chung một blob; ZIP/RAR tải qua trình duyệt chỉ là tệp trung chuyển và được xóa sau khi nhập thành công. Mỗi hồ sơ vẫn có nguồn nhập riêng, đơn vị, quyền xem và phiên bản riêng.
+
+Phân loại ban đầu dựa vào đường dẫn, tên tệp và nội dung đã trích: công văn đến/đi, ISO, chương trình đào tạo, học liệu hoặc tài liệu khác. Trong bộ ISO, hệ thống đề xuất quy trình, biểu mẫu, văn bản viện dẫn, hướng dẫn và quy định. Các tài liệu trong cùng thư mục quy trình có thể được đề xuất quan hệ **Thuộc hồ sơ**; mọi đề xuất cần người phụ trách xác nhận. Có thể sửa loại, vai trò ISO và đơn vị trong hồ sơ. Tab **Nội dung OCR** cho tải TXT hoặc JSON gồm trang, nguồn trích, metadata và đường dẫn trong archive. DOC/XLS/XLSX dùng LibreOffice nội bộ để chuyển sang PDF trước khi lấy text; trang quét dùng dịch vụ OCR tại `DAU_OCR_URL`.
+
+Để nhập archive đã có sẵn trên máy mà không tải qua trình duyệt:
+
+```bash
+python3 scripts/import_archive.py data/iso_source/example.zip --owner admin \
+  --department "Văn thư" --kind-hint iso --derive-department
+```
+
+Lệnh sẽ xác minh SHA-256 nếu thêm `--sha256 <digest>` và không tạo lại đợt nhập cho cùng đường dẫn đã đăng ký. Một archive ISO thực tế có thể mất lâu để OCR xong; trang đợt nhập tách số **đã đưa vào kho** khỏi trạng thái OCR. Tìm kiếm từ khóa chạy trên trang đã trích. Embedding localhost vẫn tắt theo mặc định (`DAU_ENABLE_SEMANTIC=0`) để chỉ lập chỉ mục ngữ nghĩa sau khi rà chất lượng OCR và so model trên câu hỏi thật. Sao lưu hiện lưu SQLite cùng các blob tài liệu đã nhập; archive nguồn bên ngoài kho không nằm trong bản sao lưu.
+
 Hai archive do người dùng cung cấp: [trọng số OCR](https://drive.google.com/file/d/1z9gD4o4faiJSaK2JpbPWc0Gogmv70o3O/view) và [dữ liệu OCR](https://drive.google.com/file/d/1D4PE7BFRN1ZqWvTNeNlxWjj_IiW_Mic7/view). Archive trọng số có SHA-256 `13b49ff4fe95ea9e2c1ef83228f26d58f26c1cd8d855b8a7828c81b4f9c99bec`, 5 tệp và CRC ZIP hợp lệ. Archive dữ liệu có SHA-256 `9f56abe07875a190e02c5a63d072ef475579c0a7585c835173661f818c0f6ad9`, chứa 46.256 mục nhưng **thiếu mục lục cuối ZIP**; bản sửa riêng tại `data/NLHUY_Dataset_fast_repaired.zip` đã qua kiểm tra CRC. Mẫu ảnh kiểm tra trong archive là chữ in và không có cặp câu hỏi–tài liệu để đánh giá embedding. Trọng số và dữ liệu đều nằm ngoài Git.
 
 ## Sao lưu và khôi phục

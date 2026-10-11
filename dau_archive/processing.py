@@ -4,17 +4,22 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 
 from .db import audit, connect, data_dir
+from .classify import classify
 from .embeddings import embed_texts, model_id
 from .extract import suggest_fields
 from .text_quality import looks_garbled_vietnamese
 
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
+ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".txt", ".md",
+                      ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
 
 
 class ProcessingUnavailable(RuntimeError):
@@ -67,6 +72,44 @@ def _ocr_image(image_bytes: bytes, filename: str) -> str:
     return text
 
 
+def _pdf_pages(path: Path, source_name: str = "native-pdf") -> list[dict]:
+    import fitz
+    pages = []
+    with fitz.open(path) as pdf:
+        if len(pdf) > 1000:
+            raise ValueError("PDF exceeds 1000 page limit")
+        for index, page in enumerate(pdf, 1):
+            text = page.get_text("text")
+            source = source_name
+            if len(text.strip()) < 20 or looks_garbled_vietnamese(text):
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                text = _ocr_image(pix.tobytes("png"), f"page-{index}.png")
+                source = "ocr"
+            pages.append({"page_no": index, "text": text, "source": source})
+    return pages
+
+
+def _office_pages(path: Path, filename: str) -> list[dict]:
+    executable = shutil.which("soffice")
+    if not executable:
+        raise ProcessingUnavailable("Cần LibreOffice nội bộ để đọc DOC/XLS/XLSX")
+    with tempfile.TemporaryDirectory(dir=data_dir()) as directory:
+        root = Path(directory)
+        source = root / ("source" + Path(filename).suffix.lower())
+        shutil.copyfile(path, source)
+        output = root / "converted"
+        output.mkdir()
+        profile = (root / "profile").as_uri()
+        environment = {**os.environ, "XDG_CACHE_HOME": str(root / "cache")}
+        result = subprocess.run([executable, f"-env:UserInstallation={profile}", "--headless",
+                                 "--convert-to", "pdf", "--outdir", str(output), str(source)],
+                                capture_output=True, text=True, timeout=180, env=environment)
+        converted = output / "source.pdf"
+        if result.returncode != 0 or not converted.is_file():
+            raise ProcessingUnavailable("Không chuyển được tệp Office sang trang PDF")
+        return _pdf_pages(converted, "converted-office")
+
+
 def extract_pages(blob_name: str, filename: str) -> list[dict]:
     path = data_dir() / "blobs" / blob_name
     sidecar = path.with_name(path.name + ".ocr.json")
@@ -82,20 +125,9 @@ def extract_pages(blob_name: str, filename: str) -> list[dict]:
         return pages
     ext = Path(filename).suffix.lower()
     if ext == ".pdf":
-        import fitz
-        pages = []
-        with fitz.open(path) as pdf:
-            if len(pdf) > 1000:
-                raise ValueError("PDF exceeds 1000 page limit")
-            for index, page in enumerate(pdf, 1):
-                text = page.get_text("text")
-                source = "native-pdf"
-                if len(text.strip()) < 20 or looks_garbled_vietnamese(text):
-                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-                    text = _ocr_image(pix.tobytes("png"), f"page-{index}.png")
-                    source = "ocr"
-                pages.append({"page_no": index, "text": text, "source": source})
-        return pages
+        return _pdf_pages(path)
+    if ext in {".doc", ".xls", ".xlsx"}:
+        return _office_pages(path, filename)
     if ext == ".docx":
         from docx import Document
         doc = Document(path)
@@ -168,7 +200,8 @@ def _propose_references(db, document_id: str, pages: list[dict]) -> None:
 def process_version(version_id: str) -> None:
     with connect() as db:
         version = db.execute(
-            "SELECT v.*,d.kind FROM versions v JOIN documents d ON d.id=v.document_id WHERE v.id=?",
+            "SELECT v.*,d.kind,d.classification_status FROM versions v "
+            "JOIN documents d ON d.id=v.document_id WHERE v.id=?",
             (version_id,),
         ).fetchone()
         if not version:
@@ -178,8 +211,27 @@ def process_version(version_id: str) -> None:
         db.execute("UPDATE versions SET status='processing',error=NULL WHERE id=?", (version_id,))
         db.execute("UPDATE jobs SET status='processing',updated_at=CURRENT_TIMESTAMP WHERE version_id=?", (version_id,))
     try:
-        pages = extract_pages(version["blob_name"], version["filename"])
-        fields = suggest_fields(pages, version["kind"])
+        with connect() as db:
+            reused = db.execute(
+                "SELECT v.id FROM versions v WHERE v.sha256=? AND v.blob_name=? "
+                "AND v.status='ready' AND v.id!=? LIMIT 1",
+                (version["sha256"], version["blob_name"], version_id),
+            ).fetchone()
+            cached_pages = [dict(row) for row in db.execute(
+                "SELECT page_no,text,source FROM pages WHERE version_id=? ORDER BY page_no",
+                (reused["id"],),
+            )] if reused else []
+        pages = cached_pages or extract_pages(version["blob_name"], version["filename"])
+        suggestion = None
+        if version["classification_status"] == "proposed":
+            with connect() as db:
+                source = db.execute("SELECT e.archive_path,b.kind_hint FROM import_batch_entries e "
+                                    "JOIN import_batches b ON b.id=e.batch_id "
+                                    "WHERE e.document_id=? LIMIT 1", (version["document_id"],)).fetchone()
+            suggestion = classify(version["filename"], source["archive_path"] if source else "",
+                                  "\n".join(page["text"] for page in pages[:2]),
+                                  source["kind_hint"] if source else "")
+        fields = suggest_fields(pages, suggestion["kind"] if suggestion else version["kind"])
         chunks = chunk_pages(pages)
         embeddings = (embed_texts([item["text"] for item in chunks])
                       if chunks and os.getenv("DAU_ENABLE_SEMANTIC", "0") == "1" else None)
@@ -211,6 +263,11 @@ def process_version(version_id: str) -> None:
                 db.execute("INSERT INTO chunks_fts(text,chunk_id) VALUES (?,?)", (chunk["text"], chunk_id))
             db.execute("UPDATE versions SET status='ready' WHERE id=?", (version_id,))
             db.execute("UPDATE documents SET current_version_id=? WHERE id=?", (version_id, version["document_id"]))
+            if suggestion:
+                db.execute("UPDATE documents SET kind=?,subtype=?,classification_confidence=?,"
+                           "classification_evidence=? WHERE id=? AND classification_status='proposed'",
+                           (suggestion["kind"], suggestion["subtype"], suggestion["confidence"],
+                            suggestion["evidence"], version["document_id"]))
             _propose_references(db, version["document_id"], pages)
             db.execute("UPDATE jobs SET status='ready',updated_at=CURRENT_TIMESTAMP WHERE version_id=?", (version_id,))
             audit(db, version["created_by"], "version.ready", version["document_id"], version_id)

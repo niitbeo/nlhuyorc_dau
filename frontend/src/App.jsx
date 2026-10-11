@@ -18,8 +18,9 @@ const KIND_ICONS = {
   curriculum: BookOpen, lesson: BookOpen, other: Files,
 };
 const VISIBILITIES = { public: 'Công khai', department: 'Trong đơn vị', restricted: 'Hạn chế' };
+const ISO_ROLES = { procedure: 'Quy trình', form: 'Biểu mẫu', reference: 'Văn bản viện dẫn', guide: 'Hướng dẫn', regulation: 'Quy định', other: 'Khác' };
 const STATUSES = {
-  queued: 'Chờ xử lý', processing: 'Đang xử lý', ready: 'Sẵn sàng', failed: 'Có lỗi',
+  queued: 'Chờ xử lý', importing: 'Đang nhập', processing: 'Đang xử lý', ready: 'Sẵn sàng', failed: 'Có lỗi',
   proposed: 'Chờ xác nhận', confirmed: 'Đã xác nhận', rejected: 'Đã bỏ',
 };
 const FIELDS = {
@@ -33,7 +34,7 @@ const RELATIONS = {
   cites: 'Viện dẫn', replaces: 'Thay thế', in_file: 'Thuộc hồ sơ',
   in_course: 'Thuộc học phần', related: 'Liên quan',
 };
-const ACCEPTED_FILES = '.pdf,.docx,.txt,.md,.png,.jpg,.jpeg,.tif,.tiff';
+const ACCEPTED_FILES = '.pdf,.doc,.docx,.xls,.xlsx,.txt,.md,.png,.jpg,.jpeg,.tif,.tiff';
 
 async function request(path, options = {}, token = '') {
   const headers = { ...(options.headers || {}) };
@@ -67,7 +68,7 @@ function DocumentCard({ doc, onOpen, compact = false }) {
   const Icon = KIND_ICONS[doc.kind] || Files;
   return <button className={`document-card ${compact ? 'document-card-compact' : ''}`} type="button" onClick={() => onOpen(doc.id)}>
     <span className={`file-icon file-icon-${doc.kind}`}><Icon size={21} strokeWidth={1.8} /></span>
-    <span className="document-card-body"><strong>{doc.title}</strong><span className="document-subtitle">{KINDS[doc.kind] || doc.kind} <span className="separator">·</span> {doc.department}</span></span>
+    <span className="document-card-body"><strong>{doc.title}</strong><span className="document-subtitle">{KINDS[doc.kind] || doc.kind} <span className="separator">·</span> {doc.department}</span>{!compact && doc.collection_key && <span className="document-source">{doc.collection_key}</span>}</span>
     {!compact && <span className="document-date"><CalendarDays size={14} />{dateLabel(doc.created_at)}</span>}
     <Status value={doc.current_version_id ? 'ready' : 'queued'} />
     <ChevronRight className="row-arrow" size={18} />
@@ -152,24 +153,74 @@ function Dashboard({ documents, me, health, openDocument, setScreen }) {
 function Documents({ documents, openDocument, refresh, setScreen }) {
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState('all');
-  const shown = useMemo(() => documents.filter(doc => (kind === 'all' || doc.kind === kind) && `${doc.title} ${doc.department} ${KINDS[doc.kind]}`.toLocaleLowerCase('vi').includes(query.toLocaleLowerCase('vi'))), [documents, kind, query]);
+  const [department, setDepartment] = useState('all');
+  const [collection, setCollection] = useState('all');
+  const departments = useMemo(() => [...new Set(documents.map(doc => doc.department))].sort((a, b) => a.localeCompare(b, 'vi')), [documents]);
+  const collections = useMemo(() => [...new Set(documents.filter(doc => (department === 'all' || doc.department === department) && doc.collection_key).map(doc => doc.collection_key))].sort((a, b) => a.localeCompare(b, 'vi')), [documents, department]);
+  const shown = useMemo(() => documents.filter(doc => (kind === 'all' || doc.kind === kind) && (department === 'all' || doc.department === department) && (collection === 'all' || doc.collection_key === collection) && `${doc.title} ${doc.department} ${doc.archive_path || ''} ${KINDS[doc.kind]}`.toLocaleLowerCase('vi').includes(query.toLocaleLowerCase('vi'))), [documents, kind, department, collection, query]);
   return <div className="page-flow"><div className="page-title-row"><div><span className="eyebrow">THƯ VIỆN TÀI LIỆU</span><h1>Kho tài liệu</h1><p>Quản lý, theo dõi và mở lại mọi hồ sơ bạn có quyền truy cập.</p></div><button className="button button-primary" onClick={() => setScreen('upload')}><Plus size={18} /> Nhập tài liệu</button></div>
-    <section className="surface documents-surface"><div className="toolbar"><div className="toolbar-search"><Search size={19} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Lọc theo tên, loại hoặc đơn vị…" aria-label="Lọc tài liệu" /></div><div className="toolbar-actions"><label className="select-wrap"><SlidersHorizontal size={17} /><select value={kind} onChange={event => setKind(event.target.value)} aria-label="Lọc loại tài liệu"><option value="all">Tất cả loại</option>{Object.entries(KINDS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><ChevronDown size={15} /></label><button className="icon-button refresh-button" onClick={refresh} title="Làm mới danh sách" aria-label="Làm mới danh sách"><RefreshCw size={18} /></button></div></div>
+    <section className="surface documents-surface"><div className="toolbar"><div className="toolbar-search"><Search size={19} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Lọc theo tên, đường dẫn hoặc đơn vị…" aria-label="Lọc tài liệu" /></div><div className="toolbar-actions"><label className="select-wrap"><SlidersHorizontal size={17} /><select value={kind} onChange={event => setKind(event.target.value)} aria-label="Lọc loại tài liệu"><option value="all">Tất cả loại</option>{Object.entries(KINDS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><ChevronDown size={15} /></label><button className="icon-button refresh-button" onClick={refresh} title="Làm mới danh sách" aria-label="Làm mới danh sách"><RefreshCw size={18} /></button></div></div>
+      <div className="folder-filters"><label>Đơn vị<select value={department} onChange={event => { setDepartment(event.target.value); setCollection('all'); }}><option value="all">Tất cả đơn vị</option>{departments.map(value => <option value={value} key={value}>{value}</option>)}</select></label><label>Bộ hồ sơ / quy trình<select value={collection} onChange={event => setCollection(event.target.value)}><option value="all">Tất cả bộ hồ sơ</option>{collections.map(value => <option value={value} key={value}>{value}</option>)}</select></label></div>
       <div className="table-caption"><strong>Danh sách hồ sơ</strong><span>{shown.length} tài liệu</span></div>
       {shown.length ? <div className="document-list">{shown.map(doc => <DocumentCard key={doc.id} doc={doc} onOpen={openDocument} />)}</div> : <EmptyState icon={FileSearch} title="Không có hồ sơ phù hợp" description={documents.length ? 'Thử từ khóa hoặc bộ lọc khác.' : 'Kho tài liệu của bạn chưa có hồ sơ nào.'} />}
     </section></div>;
 }
 
-function UploadPage({ me, onSubmit, working }) {
+function BatchUpload({ me, token, notify, onImported }) {
+  const [batches, setBatches] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const refresh = useCallback(async () => {
+    const list = await (await request('/api/import-batches?limit=10', {}, token)).json();
+    setBatches(list);
+    if (list.some(item => item.status === 'importing' || item.status === 'queued')) onImported();
+  }, [token, onImported]);
+  useEffect(() => {
+    refresh().catch(error => notify(error.message, true));
+    const timer = setInterval(() => refresh().catch(() => {}), 5000);
+    return () => clearInterval(timer);
+  }, [refresh, notify]);
+  async function submit(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const body = new FormData(form);
+    if (!body.getAll('files').some(file => file instanceof File && file.size)) return;
+    setBusy(true);
+    try {
+      const result = await (await request('/api/import-batches', { method: 'POST', body }, token)).json();
+      form.reset(); await refresh();
+      notify(`Đã nhận đợt nhập ${result.source_name}. Hệ thống đang xếp hồ sơ vào hàng đợi OCR.`);
+    } catch (error) { notify(error.message, true); }
+    finally { setBusy(false); }
+  }
+  async function retry(id) {
+    try { await request(`/api/import-batches/${id}/retry`, { method: 'POST' }, token); await refresh(); }
+    catch (error) { notify(error.message, true); }
+  }
+  return <section className="surface form-surface batch-section"><div className="surface-head"><div><span className="eyebrow">NHẬP HÀNG LOẠT</span><h2>Nhiều tài liệu, nhiều đợt</h2></div><Files size={24} /></div>
+    <p className="section-intro">Chọn nhiều tệp hoặc ZIP/RAR. Hệ thống giữ cấu trúc thư mục, tự đề xuất loại tài liệu và xử lý OCR trong nền. Bạn có thể tiếp tục nhập các đợt khác.</p>
+    <form className="form-stack" onSubmit={submit}>
+      <label className="upload-drop"><div className="upload-drop-icon"><FolderOpen size={23} /></div><strong>Chọn tệp hoặc archive</strong><span>PDF, Word, Excel, ảnh, TXT, ZIP, RAR · tối đa 1,5 GiB mỗi đợt</span><input name="files" type="file" accept={`${ACCEPTED_FILES},.zip,.rar`} multiple required /></label>
+      <div className="form-grid"><label>Gợi ý phân loại<select name="kind_hint" defaultValue=""><option value="">Tự nhận diện</option><option value="iso">Bộ tài liệu ISO</option></select></label><label>Đơn vị mặc định<input name="department" defaultValue={me.department} required /></label></div>
+      <div className="form-grid"><label>Quyền xem<select name="visibility" defaultValue="department"><option value="department">Trong đơn vị</option><option value="restricted">Hạn chế</option><option value="public">Nhân sự toàn trường</option></select></label>{me.role === 'admin' && <label className="batch-check"><input type="checkbox" name="derive_department" value="true" /> Lấy đơn vị từ thư mục ISO</label>}</div>
+      <div className="form-footer"><span><LockKeyhole size={16} /> Bản gốc lưu nội bộ; tệp trùng chỉ lưu một lần</span><button className="button button-primary" disabled={busy}>{busy ? 'Đang tải lên…' : 'Nhập loạt và xử lý'} <ArrowRight size={18} /></button></div>
+    </form>
+    <div className="batch-history"><div className="surface-head"><h3>Đợt nhập gần đây</h3><button className="button button-outline button-small" onClick={() => refresh().catch(error => notify(error.message, true))}><RefreshCw size={15} /> Làm mới</button></div>
+      {batches.length ? batches.map(item => <div className="batch-row" key={item.id}><div className="batch-row-title"><strong>{item.source_name}</strong><span className={`status status-${item.status}`}><span className="status-dot" />{item.status === "ready" ? "Đã nhập vào kho" : STATUSES[item.status]}</span></div><small>{dateLabel(item.created_at)} · {item.imported_entries}/{item.total_entries || '…'} tệp đã đưa vào kho · {item.skipped_entries} tệp bỏ qua</small><div className="batch-progress"><span style={{ width: `${item.total_entries ? Math.min(100, Math.round((item.imported_entries + item.skipped_entries) * 100 / item.total_entries)) : 0}%` }} /></div><small>OCR: {Object.entries(item.ocr || {}).map(([status, count]) => `${STATUSES[status] || status} ${count}`).join(' · ') || 'Chưa xếp hàng'}</small>{item.error && <p className="form-error">{item.error}</p>}{item.recent_errors?.length > 0 && <details className="batch-errors"><summary>{item.recent_errors.length} lỗi gần đây</summary>{item.recent_errors.map((entry, index) => <p key={index}>{entry.archive_path}: {entry.error}</p>)}</details>}{item.status === 'failed' && <button className="button button-outline button-small" onClick={() => retry(item.id)}>Thử lại đợt nhập</button>}</div>) : <p className="section-intro">Chưa có đợt nhập loạt.</p>}
+    </div>
+  </section>;
+}
+
+function UploadPage({ me, token, notify, onImported, onSubmit, working }) {
   return <div className="page-flow"><div className="page-title-row"><div><span className="eyebrow">BỔ SUNG HỒ SƠ</span><h1>Nhập tài liệu</h1><p>Tải bản gốc lên để lưu trữ, nhận dạng chữ và tạo nội dung tra cứu.</p></div></div>
     <div className="form-layout"><section className="surface form-surface"><div className="surface-head"><div><span className="eyebrow">THÔNG TIN TÀI LIỆU</span><h2>Tạo hồ sơ mới</h2></div><span className="step-pill">Bước 1 / 1</span></div>
       <form className="form-stack" onSubmit={onSubmit}><div className="form-grid"><label>Loại tài liệu<select name="kind" defaultValue="incoming">{Object.entries(KINDS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label>Đơn vị quản lý<input name="department" defaultValue={me?.department || ''} required /></label></div>
         <label>Tiêu đề hồ sơ<input name="title" placeholder="Ví dụ: Quyết định về công tác đào tạo năm 2026" maxLength="300" required /></label>
         <label>Quyền truy cập<select name="visibility" defaultValue="department"><option value="department">Người trong cùng đơn vị</option><option value="restricted">Chỉ người được cấp quyền</option><option value="public">Nhân sự toàn trường</option></select></label>
-        <label className="upload-drop"><div className="upload-drop-icon"><Upload size={23} /></div><strong>Chọn tệp tài liệu</strong><span>PDF, DOCX, TXT, Markdown hoặc ảnh · tối đa 50 MiB</span><input name="file" type="file" accept={ACCEPTED_FILES} required /></label>
+        <label className="upload-drop"><div className="upload-drop-icon"><Upload size={23} /></div><strong>Chọn tệp tài liệu</strong><span>PDF, Word, Excel, TXT, Markdown hoặc ảnh · tối đa 50 MiB</span><input name="file" type="file" accept={ACCEPTED_FILES} required /></label>
         <details className="advanced-box"><summary><Database size={17} /> Đã có kết quả OCR? Nhập nội dung theo trang <ChevronDown size={16} /></summary><label>JSON các trang OCR<textarea name="ocr_pages_json" rows="4" placeholder='[{"text":"Nội dung trang 1"}, {"text":"Nội dung trang 2"}]' /></label></details>
         <div className="form-footer"><span><LockKeyhole size={16} /> Tài liệu được lưu trên máy chủ nội bộ</span><button className="button button-primary" type="submit" disabled={working}>{working ? 'Đang tải lên…' : 'Tải lên và xử lý'} <ArrowRight size={18} /></button></div>
       </form></section><aside className="upload-aside"><div className="aside-number">01</div><ScanText size={29} /><h3>Từ tệp gốc đến hồ sơ có thể tra cứu</h3><p>Hệ thống trích nội dung PDF hoặc dùng PaddleOCR dò dòng và NLHUYOCR đọc chữ in, chữ viết tay trên trang ảnh. Mỗi trường dữ liệu đề xuất đều kèm trang nguồn để bạn kiểm tra.</p><div className="aside-steps"><div><span>1</span>Tải tệp và chọn quyền xem</div><div><span>2</span>Hệ thống đọc chữ, tách dữ liệu</div><div><span>3</span>Kiểm tra và xác nhận hồ sơ</div></div></aside></div>
+    <BatchUpload me={me} token={token} notify={notify} onImported={onImported} />
   </div>;
 }
 
@@ -190,8 +241,8 @@ function FieldItem({ field, canWrite, onReview }) {
   </div>;
 }
 
-function Detail({ data, documents, me, tab, setTab, onBack, onVersion, onDownload, onEdit, onNewVersion, onRetry, onFieldReview, onRelation, onRelationReview, onGrant, onRevoke, working }) {
-  const { document: doc, versions, pages, fields, relations, grants } = data;
+function Detail({ data, documents, me, tab, setTab, onBack, onVersion, onDownload, onExport, onEdit, onNewVersion, onRetry, onFieldReview, onRelation, onRelationReview, onGrant, onRevoke, working }) {
+  const { document: doc, versions, pages, fields, relations, grants, sources = [] } = data;
   const canWrite = me?.role === 'admin' || doc.owner_id === me?.id;
   const selected = versions.find(version => version.id === data.selected_version_id);
   const tabs = [{ id: 'overview', label: 'Tổng quan', icon: LayoutDashboard }, { id: 'pages', label: 'Nội dung OCR', icon: ScanText }, { id: 'fields', label: 'Trường dữ liệu', icon: Database }, { id: 'relations', label: 'Quan hệ', icon: Link2 }, { id: 'versions', label: 'Phiên bản', icon: History }, ...(canWrite ? [{ id: 'access', label: 'Phân quyền', icon: UsersRound }] : [])];
@@ -199,9 +250,11 @@ function Detail({ data, documents, me, tab, setTab, onBack, onVersion, onDownloa
   return <div className="page-flow detail-page"><button className="back-link" onClick={onBack}><ArrowLeft size={17} /> Quay lại kho tài liệu</button>
     <div className="detail-hero"><div className={`file-icon file-icon-${doc.kind} detail-hero-icon`}>{(() => { const Icon = KIND_ICONS[doc.kind] || Files; return <Icon size={29} />; })()}</div><div className="detail-hero-text"><span className="eyebrow">CHI TIẾT HỒ SƠ <span className="separator">/</span> {KINDS[doc.kind] || doc.kind}</span><h1>{doc.title}</h1><div className="detail-chips"><span><Building2 size={15} />{doc.department}</span><span><LockKeyhole size={15} />{VISIBILITIES[doc.visibility]}</span><span><History size={15} />{versions.length} phiên bản</span></div></div><button className="button button-primary" onClick={onDownload} disabled={!selected}><Download size={18} /> Tải bản gốc</button></div>
     <div className="detail-tabs" role="tablist" aria-label="Các phần hồ sơ">{tabs.map(({ id, label, icon: Icon }) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}><Icon size={17} />{label}</button>)}</div>
-    {tab === 'overview' && <div className="detail-columns"><section className="surface detail-main"><div className="surface-head"><div><span className="eyebrow">THÔNG TIN CHUNG</span><h2>Hồ sơ tài liệu</h2></div><Status value={selected?.status || 'queued'} /></div><div className="info-grid"><div><small>Loại tài liệu</small><strong>{KINDS[doc.kind]}</strong></div><div><small>Đơn vị quản lý</small><strong>{doc.department}</strong></div><div><small>Quyền xem</small><strong>{VISIBILITIES[doc.visibility]}</strong></div><div><small>Ngày tạo</small><strong>{dateLabel(doc.created_at)}</strong></div><div><small>Tệp gốc</small><strong>{selected?.filename || 'Đang xử lý'}</strong></div><div><small>Số trang</small><strong>{pages.length} trang</strong></div></div>
-      {canWrite && <form className="detail-edit" key={doc.id} onSubmit={onEdit}><div className="surface-head"><h3>Chỉnh sửa hồ sơ</h3></div><div className="form-grid"><label>Tiêu đề<input name="title" defaultValue={doc.title} maxLength="300" required /></label><label>Quyền xem<select name="visibility" defaultValue={doc.visibility}><option value="department">Trong đơn vị</option><option value="restricted">Hạn chế</option><option value="public">Công khai</option></select></label></div><button className="button button-outline" type="submit" disabled={working}>Lưu thay đổi</button></form>}</section><aside className="detail-side"><div className="surface side-card"><span className="eyebrow">NỘI DUNG ĐÃ XỬ LÝ</span><h3>{pages.length} trang tài liệu</h3><p>Xem nội dung theo từng trang, đối chiếu các trường dữ liệu và dẫn chứng nguồn.</p><button className="text-button" onClick={() => setTab('pages')}>Xem nội dung OCR <ArrowRight size={17} /></button></div><div className="surface side-card"><span className="eyebrow">TRẠNG THÁI</span><div className="status-line"><CheckCircle2 size={20} />Bản gốc được lưu trữ</div><div className="status-line"><CheckCircle2 size={20} />{fields.length} trường dữ liệu gợi ý</div><div className="status-line"><CheckCircle2 size={20} />{relations.length} quan hệ tài liệu</div></div></aside></div>}
-    {tab === 'pages' && <section className="surface detail-section"><div className="surface-head"><div><span className="eyebrow">VĂN BẢN THEO TRANG</span><h2>Nội dung OCR</h2></div><span className="count-pill">{pages.length} trang</span></div>{pages.length ? <div className="pages-list">{pages.map(page => <details className="page-accordion" key={page.page_no}><summary><span className="page-number">{String(page.page_no).padStart(2, '0')}</span><span><strong>Trang {page.page_no}</strong><small>{page.source === 'native-pdf' ? 'Lớp chữ PDF' : page.source === 'ocr' ? 'Đọc bằng OCR' : 'Văn bản đã nhập'}</small></span><ChevronDown size={18} /></summary><div className="page-text">{page.text || 'Trang này chưa có nội dung nhận dạng.'}</div></details>)}</div> : <EmptyState icon={ScanText} title="Chưa có nội dung" description="Tài liệu đang được xử lý hoặc chưa có văn bản theo trang." />}</section>}
+    {tab === 'overview' && <div className="detail-columns"><section className="surface detail-main"><div className="surface-head"><div><span className="eyebrow">THÔNG TIN CHUNG</span><h2>Hồ sơ tài liệu</h2></div><Status value={selected?.status || 'queued'} /></div><div className="info-grid"><div><small>Loại tài liệu</small><strong>{KINDS[doc.kind]}</strong></div><div><small>Vai trò</small><strong>{ISO_ROLES[doc.subtype] || '—'}</strong></div><div><small>Đơn vị quản lý</small><strong>{doc.department}</strong></div><div><small>Quyền xem</small><strong>{VISIBILITIES[doc.visibility]}</strong></div><div><small>Ngày tạo</small><strong>{dateLabel(doc.created_at)}</strong></div><div><small>Tệp gốc</small><strong>{selected?.filename || 'Đang xử lý'}</strong></div><div><small>Số trang</small><strong>{pages.length} trang</strong></div><div><small>Phân loại</small><strong>{STATUSES[doc.classification_status] || '—'}</strong></div></div>
+      {doc.classification_evidence && <p className="classification-evidence">Gợi ý từ hệ thống: {doc.classification_evidence}</p>}
+      {sources.length > 0 && <div className="source-paths"><h3>Nguồn nhập</h3>{sources.map((source, index) => <p key={index}><FolderOpen size={16} />{source.archive_path}</p>)}</div>}
+      {canWrite && <form className="detail-edit" key={doc.id} onSubmit={onEdit}><div className="surface-head"><h3>Chỉnh sửa và xác nhận hồ sơ</h3></div><div className="form-grid"><label>Tiêu đề<input name="title" defaultValue={doc.title} maxLength="300" required /></label><label>Quyền xem<select name="visibility" defaultValue={doc.visibility}><option value="department">Trong đơn vị</option><option value="restricted">Hạn chế</option><option value="public">Công khai</option></select></label><label>Loại tài liệu<select name="kind" defaultValue={doc.kind}>{Object.entries(KINDS).map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label><label>Vai trò ISO<select name="subtype" defaultValue={doc.subtype || ''}><option value="">Không áp dụng</option>{Object.entries(ISO_ROLES).map(([key, label]) => <option value={key} key={key}>{label}</option>)}</select></label>{me.role === 'admin' && <label>Đơn vị quản lý<input name="department" defaultValue={doc.department} required /></label>}</div><button className="button button-outline" type="submit" disabled={working}>Lưu và xác nhận</button></form>}</section><aside className="detail-side"><div className="surface side-card"><span className="eyebrow">NỘI DUNG ĐÃ XỬ LÝ</span><h3>{pages.length} trang tài liệu</h3><p>Xem nội dung theo từng trang, đối chiếu các trường dữ liệu và dẫn chứng nguồn.</p><button className="text-button" onClick={() => setTab('pages')}>Xem nội dung OCR <ArrowRight size={17} /></button></div><div className="surface side-card"><span className="eyebrow">TRẠNG THÁI</span><div className="status-line"><CheckCircle2 size={20} />Bản gốc được lưu trữ</div><div className="status-line"><CheckCircle2 size={20} />{fields.length} trường dữ liệu gợi ý</div><div className="status-line"><CheckCircle2 size={20} />{relations.length} quan hệ tài liệu</div></div></aside></div>}
+    {tab === 'pages' && <section className="surface detail-section"><div className="surface-head"><div><span className="eyebrow">VĂN BẢN THEO TRANG</span><h2>Nội dung OCR</h2></div><div className="export-actions"><span className="count-pill">{pages.length} trang</span><button className="button button-outline button-small" onClick={() => onExport('txt')} disabled={!pages.length}><Download size={15} /> TXT</button><button className="button button-outline button-small" onClick={() => onExport('json')} disabled={!pages.length}><Download size={15} /> JSON</button></div></div>{pages.length ? <div className="pages-list">{pages.map(page => <details className="page-accordion" key={page.page_no}><summary><span className="page-number">{String(page.page_no).padStart(2, '0')}</span><span><strong>Trang {page.page_no}</strong><small>{page.source === 'native-pdf' ? 'Lớp chữ PDF' : page.source === 'ocr' ? 'Đọc bằng OCR' : 'Văn bản đã nhập'}</small></span><ChevronDown size={18} /></summary><div className="page-text">{page.text || 'Trang này chưa có nội dung nhận dạng.'}</div></details>)}</div> : <EmptyState icon={ScanText} title="Chưa có nội dung" description="Tài liệu đang được xử lý hoặc chưa có văn bản theo trang." />}</section>}
     {tab === 'fields' && <section className="surface detail-section"><div className="surface-head"><div><span className="eyebrow">TRÍCH XUẤT DỮ LIỆU</span><h2>Trường dữ liệu</h2></div><span className="count-pill">{fields.length} trường</span></div><p className="section-intro">Mỗi đề xuất kèm đoạn văn bản và số trang nguồn để người phụ trách kiểm tra.</p>{fields.length ? <div className="field-grid">{fields.map(field => <FieldItem key={field.id} field={field} canWrite={canWrite} onReview={onFieldReview} />)}</div> : <EmptyState icon={Database} title="Chưa có trường dữ liệu" description="Hệ thống chưa trích được metadata từ phiên bản này." />}</section>}
     {tab === 'relations' && <section className="surface detail-section"><div className="surface-head"><div><span className="eyebrow">LIÊN KẾT HỒ SƠ</span><h2>Quan hệ tài liệu</h2></div><span className="count-pill">{relations.length} quan hệ</span></div>{relations.length ? <div className="relation-list">{relations.map(relation => <div className="relation-card" key={relation.id}><span className="relation-icon"><Link2 size={19} /></span><div><strong>{relation.source_title} <ArrowRight size={14} /> {relation.target_title}</strong><small>{RELATIONS[relation.relation_type] || relation.relation_type} · {STATUSES[relation.status] || relation.status}</small>{relation.evidence && <p>{relation.evidence}</p>}</div>{canWrite && relation.status === 'proposed' && <button className="button button-outline button-small" onClick={() => onRelationReview(relation.id)}>Xác nhận</button>}</div>)}</div> : <EmptyState icon={Link2} title="Chưa có quan hệ" description="Kết nối hồ sơ này với tài liệu khác để theo dõi nguồn viện dẫn và liên quan." />}
       {canWrite && <form className="secondary-form" onSubmit={onRelation}><h3><Plus size={18} /> Thêm quan hệ</h3><div className="form-grid"><label>Tài liệu liên kết<select name="target_id" required><option value="">Chọn tài liệu</option>{targets.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label><label>Loại quan hệ<select name="relation_type">{Object.entries(RELATIONS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div><label>Ghi chú / bằng chứng<input name="evidence" maxLength="500" placeholder="Mô tả lý do liên kết (nếu có)" /></label><button className="button button-primary" disabled={!targets.length || working}><Plus size={17} /> Thêm quan hệ</button></form>}</section>}
@@ -357,7 +410,7 @@ export default function App() {
   const notify = useCallback((message, error = false) => setToast({ message, error, id: Date.now() }), []);
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(null), 5000); return () => clearTimeout(timer); }, [toast]);
   const loadDocuments = useCallback(async (accessToken = token) => {
-    const list = await (await request('/api/documents?limit=500', {}, accessToken)).json();
+    const list = await (await request('/api/documents?limit=2000', {}, accessToken)).json();
     setDocuments(list);
     return list;
   }, [token]);
@@ -366,7 +419,7 @@ export default function App() {
     let live = true;
     Promise.all([
       request('/api/me', {}, token).then(response => response.json()),
-      request('/api/documents?limit=500', {}, token).then(response => response.json()),
+      request('/api/documents?limit=2000', {}, token).then(response => response.json()),
       request('/api/health').then(response => response.json()),
     ]).then(([account, list, status]) => {
       if (!live) return;
@@ -498,6 +551,16 @@ export default function App() {
       setTimeout(() => URL.revokeObjectURL(url), 30000);
     } catch (error) { notify(error.message, true); }
   }
+  async function exportText(format) {
+    if (!detail) return;
+    try {
+      const response = await request(`/api/documents/${detail.document.id}/export?format=${format}`, {}, token);
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement('a'); anchor.href = url;
+      anchor.download = `${detail.document.id}.${format}`; anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (error) { notify(error.message, true); }
+  }
   async function search(event) {
     event?.preventDefault();
     if (!searchQuery.trim()) return;
@@ -514,11 +577,11 @@ export default function App() {
       <main className="content-wrap">
         {screen === 'dashboard' && <Dashboard documents={documents} me={me} health={health} openDocument={openDocument} setScreen={setScreen} />}
         {screen === 'documents' && <Documents documents={documents} openDocument={openDocument} refresh={() => loadDocuments().catch(error => notify(error.message, true))} setScreen={setScreen} />}
-        {screen === 'upload' && <UploadPage me={me} onSubmit={upload} working={working} />}
+        {screen === 'upload' && <UploadPage me={me} token={token} notify={notify} onImported={loadDocuments} onSubmit={upload} working={working} />}
         {screen === 'search' && <SearchPage query={searchQuery} setQuery={setSearchQuery} results={searchResults} onSearch={search} working={working} searched={searched} openDocument={openDocument} />}
         {screen === 'settings' && me.role === 'admin' && <ApiSettings token={token} notify={notify} />}
         {screen === 'models' && me.role === 'admin' && <ModelCheck token={token} notify={notify} />}
-        {screen === 'detail' && detail && <Detail data={detail} documents={documents} me={me} tab={detailTab} setTab={setDetailTab} onBack={() => setScreen('documents')} onVersion={versionId => openDocument(detail.document.id, versionId, true)} onDownload={download} onEdit={editDocument} onNewVersion={newVersion} onRetry={retry} onFieldReview={reviewField} onRelation={addRelation} onRelationReview={reviewRelation} onGrant={grant} onRevoke={revoke} working={working} />}
+        {screen === 'detail' && detail && <Detail data={detail} documents={documents} me={me} tab={detailTab} setTab={setDetailTab} onBack={() => setScreen('documents')} onVersion={versionId => openDocument(detail.document.id, versionId, true)} onDownload={download} onExport={exportText} onEdit={editDocument} onNewVersion={newVersion} onRetry={retry} onFieldReview={reviewField} onRelation={addRelation} onRelationReview={reviewRelation} onGrant={grant} onRevoke={revoke} working={working} />}
       </main><footer className="app-footer">NLHUYOCR <span>·</span> Kho hồ sơ tài liệu nội bộ</footer></div>
     {toast && <div className={`toast ${toast.error ? 'toast-error' : ''}`} role="status">{toast.error ? <AlertCircle size={19} /> : <CheckCircle2 size={19} />}<span>{toast.message}</span><button onClick={() => setToast(null)} aria-label="Đóng thông báo"><X size={17} /></button></div>}
   </div>;
