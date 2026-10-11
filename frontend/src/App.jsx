@@ -127,13 +127,13 @@ function Sidebar({ screen, setScreen, me, onLogout, mobileOpen, setMobileOpen })
     </aside></>;
 }
 
-function Dashboard({ documents, me, health, openDocument, setScreen }) {
+function Dashboard({ documents, me, health, stats, openDocument, setScreen }) {
   const counts = useMemo(() => ({
-    total: documents.length,
-    incoming: documents.filter(d => d.kind === 'incoming').length,
-    outgoing: documents.filter(d => d.kind === 'outgoing').length,
-    learning: documents.filter(d => ['curriculum', 'lesson'].includes(d.kind)).length,
-  }), [documents]);
+    total: stats?.total ?? documents.length,
+    incoming: stats?.kinds?.incoming ?? documents.filter(d => d.kind === 'incoming').length,
+    outgoing: stats?.kinds?.outgoing ?? documents.filter(d => d.kind === 'outgoing').length,
+    learning: stats ? (stats.kinds?.curriculum || 0) + (stats.kinds?.lesson || 0) : documents.filter(d => ['curriculum', 'lesson'].includes(d.kind)).length,
+  }), [documents, stats]);
   const cards = [
     { label: 'Tổng hồ sơ', value: counts.total, icon: Files, tint: 'teal' },
     { label: 'Công văn đến', value: counts.incoming, icon: Download, tint: 'blue' },
@@ -150,19 +150,41 @@ function Dashboard({ documents, me, health, openDocument, setScreen }) {
   </div>;
 }
 
-function Documents({ documents, openDocument, refresh, setScreen }) {
+function Documents({ token, notify, openDocument, setScreen }) {
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState('all');
   const [department, setDepartment] = useState('all');
   const [collection, setCollection] = useState('all');
-  const departments = useMemo(() => [...new Set(documents.map(doc => doc.department))].sort((a, b) => a.localeCompare(b, 'vi')), [documents]);
-  const collections = useMemo(() => [...new Set(documents.filter(doc => (department === 'all' || doc.department === department) && doc.collection_key).map(doc => doc.collection_key))].sort((a, b) => a.localeCompare(b, 'vi')), [documents, department]);
-  const shown = useMemo(() => documents.filter(doc => (kind === 'all' || doc.kind === kind) && (department === 'all' || doc.department === department) && (collection === 'all' || doc.collection_key === collection) && `${doc.title} ${doc.department} ${doc.archive_path || ''} ${KINDS[doc.kind]}`.toLocaleLowerCase('vi').includes(query.toLocaleLowerCase('vi'))), [documents, kind, department, collection, query]);
+  const [facets, setFacets] = useState({ departments: [], collections: [] });
+  const [page, setPage] = useState(0);
+  const [result, setResult] = useState({ items: [], total: 0 });
+  const [refreshKey, setRefreshKey] = useState(0);
+  const collections = useMemo(() => facets.collections.filter(item => department === 'all' || item.department === department).map(item => item.collection_key), [facets, department]);
+  useEffect(() => {
+    request('/api/documents/facets', {}, token).then(response => response.json()).then(setFacets)
+      .catch(error => notify(error.message, true));
+  }, [token, notify, refreshKey]);
+  useEffect(() => {
+    let live = true;
+    const timer = setTimeout(() => {
+      const params = new URLSearchParams({ limit: '50', offset: String(page * 50) });
+      if (query.trim()) params.set('q', query.trim());
+      if (kind !== 'all') params.set('kind', kind);
+      if (department !== 'all') params.set('department', department);
+      if (collection !== 'all') params.set('collection', collection);
+      request(`/api/documents/page?${params}`, {}, token).then(response => response.json())
+        .then(value => { if (live) setResult(value); })
+        .catch(error => { if (live) notify(error.message, true); });
+    }, 220);
+    return () => { live = false; clearTimeout(timer); };
+  }, [token, notify, page, query, kind, department, collection, refreshKey]);
+  const shown = result.items;
   return <div className="page-flow"><div className="page-title-row"><div><span className="eyebrow">THƯ VIỆN TÀI LIỆU</span><h1>Kho tài liệu</h1><p>Quản lý, theo dõi và mở lại mọi hồ sơ bạn có quyền truy cập.</p></div><button className="button button-primary" onClick={() => setScreen('upload')}><Plus size={18} /> Nhập tài liệu</button></div>
-    <section className="surface documents-surface"><div className="toolbar"><div className="toolbar-search"><Search size={19} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Lọc theo tên, đường dẫn hoặc đơn vị…" aria-label="Lọc tài liệu" /></div><div className="toolbar-actions"><label className="select-wrap"><SlidersHorizontal size={17} /><select value={kind} onChange={event => setKind(event.target.value)} aria-label="Lọc loại tài liệu"><option value="all">Tất cả loại</option>{Object.entries(KINDS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><ChevronDown size={15} /></label><button className="icon-button refresh-button" onClick={refresh} title="Làm mới danh sách" aria-label="Làm mới danh sách"><RefreshCw size={18} /></button></div></div>
-      <div className="folder-filters"><label>Đơn vị<select value={department} onChange={event => { setDepartment(event.target.value); setCollection('all'); }}><option value="all">Tất cả đơn vị</option>{departments.map(value => <option value={value} key={value}>{value}</option>)}</select></label><label>Bộ hồ sơ / quy trình<select value={collection} onChange={event => setCollection(event.target.value)}><option value="all">Tất cả bộ hồ sơ</option>{collections.map(value => <option value={value} key={value}>{value}</option>)}</select></label></div>
-      <div className="table-caption"><strong>Danh sách hồ sơ</strong><span>{shown.length} tài liệu</span></div>
-      {shown.length ? <div className="document-list">{shown.map(doc => <DocumentCard key={doc.id} doc={doc} onOpen={openDocument} />)}</div> : <EmptyState icon={FileSearch} title="Không có hồ sơ phù hợp" description={documents.length ? 'Thử từ khóa hoặc bộ lọc khác.' : 'Kho tài liệu của bạn chưa có hồ sơ nào.'} />}
+    <section className="surface documents-surface"><div className="toolbar"><div className="toolbar-search"><Search size={19} /><input value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} placeholder="Lọc theo tên, đường dẫn hoặc đơn vị…" aria-label="Lọc tài liệu" /></div><div className="toolbar-actions"><label className="select-wrap"><SlidersHorizontal size={17} /><select value={kind} onChange={event => { setKind(event.target.value); setPage(0); }} aria-label="Lọc loại tài liệu"><option value="all">Tất cả loại</option>{Object.entries(KINDS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><ChevronDown size={15} /></label><button className="icon-button refresh-button" onClick={() => setRefreshKey(value => value + 1)} title="Làm mới danh sách" aria-label="Làm mới danh sách"><RefreshCw size={18} /></button></div></div>
+      <div className="folder-filters"><label>Đơn vị<select value={department} onChange={event => { setDepartment(event.target.value); setCollection('all'); setPage(0); }}><option value="all">Tất cả đơn vị</option>{facets.departments.map(value => <option value={value} key={value}>{value}</option>)}</select></label><label>Bộ hồ sơ / quy trình<select value={collection} onChange={event => { setCollection(event.target.value); setPage(0); }}><option value="all">Tất cả bộ hồ sơ</option>{collections.map(value => <option value={value} key={value}>{value}</option>)}</select></label></div>
+      <div className="table-caption"><strong>Danh sách hồ sơ</strong><span>{result.total.toLocaleString('vi-VN')} tài liệu</span></div>
+      {shown.length ? <div className="document-list">{shown.map(doc => <DocumentCard key={doc.id} doc={doc} onOpen={openDocument} />)}</div> : <EmptyState icon={FileSearch} title="Không có hồ sơ phù hợp" description={result.total ? 'Thử từ khóa hoặc bộ lọc khác.' : 'Kho tài liệu của bạn chưa có hồ sơ nào.'} />}
+      {result.total > 50 && <div className="document-pagination"><button className="button button-outline button-small" disabled={page === 0} onClick={() => setPage(value => value - 1)}>Trang trước</button><span>Trang {page + 1} / {Math.ceil(result.total / 50)}</span><button className="button button-outline button-small" disabled={(page + 1) * 50 >= result.total} onClick={() => setPage(value => value + 1)}>Trang sau</button></div>}
     </section></div>;
 }
 
@@ -397,6 +419,7 @@ export default function App() {
   const [me, setMe] = useState(null);
   const [documents, setDocuments] = useState([]);
   const [health, setHealth] = useState(null);
+  const [stats, setStats] = useState(null);
   const [screen, setScreen] = useState('dashboard');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [detail, setDetail] = useState(null);
@@ -412,7 +435,13 @@ export default function App() {
   const loadDocuments = useCallback(async (accessToken = token) => {
     const list = await (await request('/api/documents?limit=2000', {}, accessToken)).json();
     setDocuments(list);
+    setStats(await (await request('/api/documents/facets', {}, accessToken)).json());
     return list;
+  }, [token]);
+  const loadStats = useCallback(async (accessToken = token) => {
+    const value = await (await request('/api/documents/facets', {}, accessToken)).json();
+    setStats(value);
+    return value;
   }, [token]);
   useEffect(() => {
     if (!token) return;
@@ -421,9 +450,10 @@ export default function App() {
       request('/api/me', {}, token).then(response => response.json()),
       request('/api/documents?limit=2000', {}, token).then(response => response.json()),
       request('/api/health').then(response => response.json()),
-    ]).then(([account, list, status]) => {
+      request('/api/documents/facets', {}, token).then(response => response.json()),
+    ]).then(([account, list, status, summary]) => {
       if (!live) return;
-      setMe(account); setDocuments(list); setHealth(status);
+      setMe(account); setDocuments(list); setHealth(status); setStats(summary);
     }).catch(error => {
       if (!live) return;
       if (/401|đăng nhập|hết hạn/i.test(error.message)) { sessionStorage.removeItem('dau_token'); setToken(''); }
@@ -575,9 +605,9 @@ export default function App() {
   return <div className="app-shell"><Sidebar screen={screen} setScreen={setScreen} me={me} onLogout={logout} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
     <div className="app-main"><header className="topbar"><button className="icon-button mobile-menu" aria-label="Mở menu" onClick={() => setMobileOpen(true)}><Menu size={22} /></button><div className="topbar-path">Không gian làm việc <ChevronRight size={15} /><strong>{screen === 'dashboard' ? 'Tổng quan' : screen === 'documents' || screen === 'detail' ? 'Kho tài liệu' : screen === 'upload' ? 'Nhập tài liệu' : screen === 'settings' ? 'Cài đặt API' : screen === 'models' ? 'Kiểm tra model' : 'Tra cứu'}</strong></div><form className="topbar-search" onSubmit={search}><Search size={17} /><input value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Tìm trong tài liệu…" aria-label="Tìm trong tài liệu" /><span>↵</span></form><div className="topbar-user"><span className="topbar-status"><span className="online-dot" /> Hệ thống hoạt động</span>{me.role === 'admin' && <button className={`icon-button settings-button ${screen === 'settings' ? 'active' : ''}`} type="button" aria-label="Cài đặt API" title="Cài đặt API" onClick={() => setScreen('settings')}><Settings2 size={19} /></button>}<span className="avatar">{me.username.slice(0, 1).toUpperCase()}</span></div></header>
       <main className="content-wrap">
-        {screen === 'dashboard' && <Dashboard documents={documents} me={me} health={health} openDocument={openDocument} setScreen={setScreen} />}
-        {screen === 'documents' && <Documents documents={documents} openDocument={openDocument} refresh={() => loadDocuments().catch(error => notify(error.message, true))} setScreen={setScreen} />}
-        {screen === 'upload' && <UploadPage me={me} token={token} notify={notify} onImported={loadDocuments} onSubmit={upload} working={working} />}
+        {screen === 'dashboard' && <Dashboard documents={documents} me={me} health={health} stats={stats} openDocument={openDocument} setScreen={setScreen} />}
+        {screen === 'documents' && <Documents token={token} notify={notify} openDocument={openDocument} setScreen={setScreen} />}
+        {screen === 'upload' && <UploadPage me={me} token={token} notify={notify} onImported={loadStats} onSubmit={upload} working={working} />}
         {screen === 'search' && <SearchPage query={searchQuery} setQuery={setSearchQuery} results={searchResults} onSearch={search} working={working} searched={searched} openDocument={openDocument} />}
         {screen === 'settings' && me.role === 'admin' && <ApiSettings token={token} notify={notify} />}
         {screen === 'models' && me.role === 'admin' && <ModelCheck token={token} notify={notify} />}

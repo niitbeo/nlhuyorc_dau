@@ -445,6 +445,64 @@ def list_documents(user=Depends(current_user), limit: int = 100):
         return [dict(row) for row in rows]
 
 
+@app.get("/api/documents/page")
+def page_documents(user=Depends(current_user), limit: int = 50, offset: int = 0,
+                   q: str = "", kind: str = "", department: str = "", collection: str = ""):
+    if kind and kind not in KINDS:
+        raise HTTPException(422, "Loại tài liệu không hợp lệ")
+    limit, offset = max(1, min(limit, 100)), max(0, offset)
+    acl_sql, acl_params = _acl(user)
+    clauses = [acl_sql]
+    params = list(acl_params)
+    if kind:
+        clauses.append("d.kind=?")
+        params.append(kind)
+    if department:
+        clauses.append("d.department=?")
+        params.append(department)
+    if collection:
+        clauses.append("EXISTS (SELECT 1 FROM import_batch_entries e "
+                       "WHERE e.document_id=d.id AND e.collection_key=?)")
+        params.append(collection)
+    if q.strip():
+        term = "%" + q.strip()[:120] + "%"
+        clauses.append("(d.title LIKE ? OR d.department LIKE ? OR EXISTS ("
+                       "SELECT 1 FROM import_batch_entries e WHERE e.document_id=d.id "
+                       "AND e.archive_path LIKE ?))")
+        params.extend([term, term, term])
+    where = " AND ".join(clauses)
+    with connect() as db:
+        total = db.execute(f"SELECT COUNT(*) FROM documents d WHERE {where}", params).fetchone()[0]
+        rows = db.execute(
+            "SELECT d.*,(SELECT e.collection_key FROM import_batch_entries e "
+            "WHERE e.document_id=d.id LIMIT 1) AS collection_key,"
+            "(SELECT e.archive_path FROM import_batch_entries e "
+            "WHERE e.document_id=d.id LIMIT 1) AS archive_path "
+            f"FROM documents d WHERE {where} ORDER BY d.created_at DESC,d.rowid DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        ).fetchall()
+    return {"items": [dict(row) for row in rows], "total": total,
+            "limit": limit, "offset": offset}
+
+
+@app.get("/api/documents/facets")
+def document_facets(user=Depends(current_user)):
+    acl_sql, acl_params = _acl(user)
+    with connect() as db:
+        departments = [row["department"] for row in db.execute(
+            f"SELECT DISTINCT d.department FROM documents d WHERE {acl_sql} "
+            "ORDER BY d.department", acl_params)]
+        collections = [dict(row) for row in db.execute(
+            "SELECT DISTINCT d.department,e.collection_key FROM import_batch_entries e "
+            f"JOIN documents d ON d.id=e.document_id WHERE {acl_sql} "
+            "ORDER BY d.department,e.collection_key", acl_params)]
+        kinds = {row["kind"]: row["n"] for row in db.execute(
+            f"SELECT d.kind,COUNT(*) AS n FROM documents d WHERE {acl_sql} GROUP BY d.kind",
+            acl_params)}
+    return {"departments": departments, "collections": collections, "kinds": kinds,
+            "total": sum(kinds.values())}
+
+
 @app.get("/api/documents/{document_id}")
 def get_document(document_id: str, version_id: Optional[str] = None, user=Depends(current_user)):
     with connect() as db:

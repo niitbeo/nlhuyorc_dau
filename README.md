@@ -55,6 +55,8 @@ Màn hình **Nhập tài liệu → Nhập hàng loạt** nhận nhiều tệp P
 
 Phân loại ban đầu dựa vào đường dẫn, tên tệp và nội dung đã trích: công văn đến/đi, ISO, chương trình đào tạo, học liệu hoặc tài liệu khác. Trong bộ ISO, hệ thống đề xuất quy trình, biểu mẫu, văn bản viện dẫn, hướng dẫn và quy định. Các tài liệu trong cùng thư mục quy trình có thể được đề xuất quan hệ **Thuộc hồ sơ**; mọi đề xuất cần người phụ trách xác nhận. Có thể sửa loại, vai trò ISO và đơn vị trong hồ sơ. Tab **Nội dung OCR** cho tải TXT hoặc JSON gồm trang, nguồn trích, metadata và đường dẫn trong archive. DOC/XLS/XLSX dùng LibreOffice nội bộ để chuyển sang PDF trước khi lấy text; trang quét dùng dịch vụ OCR tại `DAU_OCR_URL`.
 
+Kho tài liệu phân trang 50 hồ sơ mỗi lần và lọc trên SQLite theo tên, đường dẫn nguồn, loại, đơn vị hoặc bộ hồ sơ. Bộ lọc và tổng số hồ sơ được tính trên toàn bộ dữ liệu người dùng được phép xem, không bị giới hạn bởi số tài liệu đã tải vào trình duyệt.
+
 Để nhập archive đã có sẵn trên máy mà không tải qua trình duyệt:
 
 ```bash

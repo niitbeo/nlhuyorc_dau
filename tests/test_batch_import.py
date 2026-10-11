@@ -52,6 +52,14 @@ def test_reusable_batch_import_classification_sources_acl_and_export(monkeypatch
         assert batch["imported_entries"] == 4
         assert batch["skipped_entries"] == 1
         assert "Đường dẫn" in batch["recent_errors"][0]["error"]
+        listing = client.get("/api/documents/page", headers=admin,
+                             params={"department": "Phòng A", "kind": "iso",
+                                     "limit": 2, "offset": 2}).json()
+        assert listing["total"] == 4 and len(listing["items"]) == 2
+        assert client.get("/api/documents/page", headers=outside).json()["total"] == 0
+        facets = client.get("/api/documents/facets", headers=admin).json()
+        assert facets["total"] == 4 and facets["departments"] == ["Phòng A"]
+        assert facets["collections"][0]["collection_key"].startswith("DAU-ISO/")
 
         with connect() as db:
             rows = db.execute("SELECT d.*,e.archive_path,v.blob_name FROM documents d "
