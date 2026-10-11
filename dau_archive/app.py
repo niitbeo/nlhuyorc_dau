@@ -19,8 +19,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import auth
+from . import graph
 from . import model_eval
 from . import batch_import
+from . import embedding_jobs
 from .classify import KINDS, ISO_ROLES
 from .db import audit, connect, data_dir, init_db
 from .embeddings import available as embeddings_available, model_id
@@ -34,6 +36,7 @@ from .worker import serve
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    embedding_jobs.recover_interrupted_jobs()
     stop = threading.Event()
     thread = None
     batch_thread = None
@@ -121,6 +124,14 @@ class ModelCheckBody(BaseModel):
     printed_count: int = Field(default=2, ge=1, le=3)
     handwritten_count: int = Field(default=3, ge=1, le=5)
     compare_gemini: bool = False
+
+
+class EmbeddingJobBody(BaseModel):
+    limit: int = Field(default=100, ge=1, le=5000)
+
+
+class EmbeddingModelBody(BaseModel):
+    key: str = Field(pattern="^(vietnamese-v2|bge-m3)$")
 
 
 def require_admin(user=Depends(current_user)):
@@ -233,9 +244,14 @@ def home():
 
 @app.get("/api/health")
 def health():
+    with connect() as db:
+        semantic_indexed = db.execute(
+            "SELECT 1 FROM chunk_embeddings WHERE model_id=? LIMIT 1",
+            (model_id(),),
+        ).fetchone() is not None
     return {"status": "ok", "embedding_model": model_id(),
             "embedding_local_ready": embeddings_available(),
-            "semantic_search_enabled": os.getenv("DAU_ENABLE_SEMANTIC", "0") == "1",
+            "semantic_search_enabled": semantic_indexed and embeddings_available(),
             "ocr_endpoint_configured": bool(os.getenv("DAU_OCR_URL"))}
 
 
@@ -502,6 +518,53 @@ def document_facets(user=Depends(current_user)):
             acl_params)}
     return {"departments": departments, "collections": collections, "kinds": kinds,
             "total": sum(kinds.values())}
+
+
+@app.get("/api/graph/{document_id}")
+def document_graph(document_id: str, depth: int = 2, limit: int = 80,
+                   include_proposed: bool = True, user=Depends(current_user)):
+    result = graph.neighborhood(user, document_id, depth, limit, include_proposed)
+    if result is None:
+        raise HTTPException(404, "Không tìm thấy tài liệu")
+    return result
+
+
+@app.get("/api/documents/{document_id}/similar")
+def similar_document_api(document_id: str, limit: int = 10, user=Depends(current_user)):
+    result = embedding_jobs.similar_documents(user, document_id, limit)
+    if result is None:
+        raise HTTPException(404, "Không tìm thấy tài liệu")
+    return result
+
+
+@app.get("/api/admin/embeddings")
+def embedding_admin_status(user=Depends(require_admin)):
+    return embedding_jobs.status()
+
+
+@app.post("/api/admin/embeddings/reindex", status_code=202)
+def start_embedding_reindex(body: EmbeddingJobBody, user=Depends(require_admin)):
+    try:
+        return embedding_jobs.start_job(user["id"], body.limit)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@app.post("/api/admin/embeddings/model")
+def switch_embedding_model(body: EmbeddingModelBody, user=Depends(require_admin)):
+    with connect() as db:
+        if db.execute("SELECT 1 FROM embedding_jobs WHERE status IN ('queued','running') LIMIT 1").fetchone():
+            raise HTTPException(409, "Chờ lượt lập chỉ mục hiện tại hoàn thành")
+    from .embeddings import select_model
+    try:
+        select_model(body.key)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    with connect() as db:
+        audit(db, user["id"], "embedding.model", detail=body.key)
+    return embedding_jobs.status()
 
 
 @app.get("/api/review/queue")
@@ -808,8 +871,14 @@ def revoke_access(document_id: str, user_id: str, user=Depends(current_user)):
 
 
 @app.get("/api/search")
-def search_api(q: str, user=Depends(current_user), limit: int = 10):
-    return {"results": search(user, q, limit)}
+def search_api(q: str, user=Depends(current_user), limit: int = 10,
+               mode: str = "hybrid", kind: str = "", department: str = "",
+               collection: str = ""):
+    if mode not in {"keyword", "semantic", "hybrid"}:
+        raise HTTPException(422, "Chế độ tìm kiếm không hợp lệ")
+    if kind and kind not in KINDS:
+        raise HTTPException(422, "Loại tài liệu không hợp lệ")
+    return search(user, q, limit, mode, kind, department, collection)
 
 
 @app.post("/api/admin/reindex")

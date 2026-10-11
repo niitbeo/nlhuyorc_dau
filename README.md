@@ -80,9 +80,20 @@ python -m dau_archive.admin restore /duong/dan/backup.tar.gz /duong/dan/thu_muc_
 
 Bản sao lưu gồm ảnh chụp SQLite nhất quán, tệp gốc và OCR JSON; manifest SHA-256 được kiểm tra khi khôi phục. Nên lưu backup ở thiết bị khác và thử khôi phục định kỳ. Đặt `DAU_DATA_DIR` trỏ tới thư mục đã khôi phục để mở lại hệ thống.
 
-## Tra cứu ngữ nghĩa giai đoạn sau
+## Sơ đồ quan hệ và tra cứu bằng embedding
 
-Mặc định kho dùng SQLite FTS5/BM25, chạy cục bộ và không có phí API. Mã nền cho embedding localhost đã có nhưng **tắt mặc định**. Khi có bộ câu hỏi–tài liệu thực tế của trường và model tải tại máy, có thể cài `sentence-transformers`, đặt `DAU_EMBED_MODEL_PATH` và `DAU_ENABLE_SEMANTIC=1`, rồi gọi lệnh tái lập chỉ mục. Model khởi đầu dự kiến là `AITeamVN/Vietnamese_Embedding_v2`; so với `BAAI/bge-m3` trên tập đánh giá thực tế trước khi áp dụng toàn kho. Chưa có chatbot hoặc API trả lời tự động trong giai đoạn này.
+Menu **Sơ đồ quan hệ** cho chọn một hồ sơ, xem 1–3 lớp liên kết, lọc theo loại và trạng thái đề xuất, mở hồ sơ liên quan, tạo quan hệ thủ công có trang/bằng chứng và xác nhận hoặc bỏ đề xuất. Mỗi nút/quan hệ đều được kiểm tra quyền xem ở API; không hiển thị hồ sơ kín cho người không được cấp quyền. Từ tab **Quan hệ** của một hồ sơ có thể mở sơ đồ lấy hồ sơ đó làm tâm.
+
+Tìm kiếm có ba chế độ: **Từ khóa** (SQLite FTS5/BM25), **Ngữ nghĩa** (vector tại máy), và **Kết hợp** (xếp hạng trộn hai nguồn). Khi model chưa có hoặc chưa lập vector, chế độ Kết hợp tự dùng từ khóa và báo rõ trạng thái; chế độ Ngữ nghĩa không tạo kết quả giả. API hỗ trợ lọc loại tài liệu, đơn vị và bộ sưu tập. Tab **Tương tự** trong hồ sơ dùng vector tài liệu để gợi ý các hồ sơ gần nhau theo quyền truy cập.
+
+Quản trị viên vào menu **Embedding** để chọn `AITeamVN/Vietnamese_Embedding_v2` hoặc `BAAI/bge-m3`, xem số đoạn/tài liệu đã lập chỉ mục và chạy từng lượt 20–2.000 đoạn. Trọng số chạy nội bộ; không gọi API embedding. Tải model đầu tiên bằng:
+
+```bash
+python3 -m pip install -r requirements-embedding.txt
+python3 scripts/fetch_embedding_model.py --model vietnamese-v2
+```
+
+Tệp lớn nằm tại `data/models/` và được bỏ qua bởi Git. Sau khi tải, bấm **Làm mới** rồi chạy thử một lượt 20 đoạn. Chỉ mục lưu riêng theo model và phiên bản tài liệu; khi đổi model phải lập vector cho model mới. `sentence-transformers` được dùng nếu đã cài; nếu không, hệ thống dùng `transformers` với mean pooling tại CPU. Có thể đặt `DAU_EMBED_MODEL_PATH` để dùng thư mục trọng số riêng. Không nên lập toàn bộ 19.000+ đoạn trên CPU trước khi đo chất lượng/tốc độ bằng câu hỏi thật của trường. Chưa có chatbot hoặc API trả lời tự động trong giai đoạn này.
 
 ## Kiểm thử
 

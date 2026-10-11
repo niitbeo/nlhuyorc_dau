@@ -122,6 +122,29 @@ CREATE TABLE IF NOT EXISTS jobs (
  error TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS embedding_settings (
+ key TEXT PRIMARY KEY, value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS embedding_jobs (
+ id TEXT PRIMARY KEY, model_id TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('queued','running','ready','failed')),
+ total INTEGER NOT NULL DEFAULT 0, completed INTEGER NOT NULL DEFAULT 0,
+ error TEXT, created_by TEXT REFERENCES users(id),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS chunk_embeddings (
+ chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+ model_id TEXT NOT NULL, embedding BLOB NOT NULL,
+ PRIMARY KEY(chunk_id,model_id)
+);
+CREATE TABLE IF NOT EXISTS document_embeddings (
+ document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+ version_id TEXT NOT NULL REFERENCES versions(id) ON DELETE CASCADE,
+ model_id TEXT NOT NULL, embedding BLOB NOT NULL,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(document_id,model_id)
+);
 CREATE TABLE IF NOT EXISTS audit (
  id INTEGER PRIMARY KEY AUTOINCREMENT, actor_id TEXT REFERENCES users(id),
  action TEXT NOT NULL, document_id TEXT, detail TEXT NOT NULL DEFAULT '',
@@ -135,6 +158,11 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status,created_at);
 CREATE INDEX IF NOT EXISTS idx_import_batches_status ON import_batches(status,created_at);
 CREATE INDEX IF NOT EXISTS idx_import_batch_entries_doc ON import_batch_entries(document_id);
 CREATE INDEX IF NOT EXISTS idx_import_batch_entries_collection ON import_batch_entries(batch_id,collection_key);
+CREATE INDEX IF NOT EXISTS idx_relations_source_status ON relations(source_id,status);
+CREATE INDEX IF NOT EXISTS idx_relations_target_status ON relations(target_id,status);
+CREATE INDEX IF NOT EXISTS idx_chunks_model ON chunks(model_id,version_id);
+CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_model ON chunk_embeddings(model_id);
+CREATE INDEX IF NOT EXISTS idx_document_embeddings_model ON document_embeddings(model_id);
 """
 
 
@@ -142,6 +170,9 @@ def init_db() -> None:
     with connect() as db:
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript(SCHEMA)
+        db.execute("INSERT OR IGNORE INTO chunk_embeddings(chunk_id,model_id,embedding) "
+                   "SELECT id,model_id,embedding FROM chunks "
+                   "WHERE model_id IS NOT NULL AND embedding IS NOT NULL")
         existing = {row["name"] for row in db.execute("PRAGMA table_info(documents)")}
         for name, definition in {
             "subtype": "TEXT NOT NULL DEFAULT ''",

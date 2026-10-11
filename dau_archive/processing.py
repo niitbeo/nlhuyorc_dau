@@ -235,6 +235,7 @@ def process_version(version_id: str) -> None:
         chunks = chunk_pages(pages)
         embeddings = (embed_texts([item["text"] for item in chunks])
                       if chunks and os.getenv("DAU_ENABLE_SEMANTIC", "0") == "1" else None)
+        embedding_model = model_id() if embeddings else None
         with connect() as db:
             # A worker can restart after an interrupted job. Replace partial derived
             # records atomically before inserting the new OCR result.
@@ -258,9 +259,12 @@ def process_version(version_id: str) -> None:
                     "INSERT INTO chunks(id,version_id,page_no,ordinal,text,embedding,model_id) "
                     "VALUES (?,?,?,?,?,?,?)",
                     (chunk_id, version_id, chunk["page_no"], chunk["ordinal"], chunk["text"],
-                     embeddings[index] if embeddings else None, model_id() if embeddings else None),
+                     embeddings[index] if embeddings else None, embedding_model),
                 )
                 db.execute("INSERT INTO chunks_fts(text,chunk_id) VALUES (?,?)", (chunk["text"], chunk_id))
+                if embeddings:
+                    db.execute("INSERT INTO chunk_embeddings(chunk_id,model_id,embedding) VALUES (?,?,?)",
+                               (chunk_id, embedding_model, embeddings[index]))
             db.execute("UPDATE versions SET status='ready' WHERE id=?", (version_id,))
             db.execute("UPDATE documents SET current_version_id=? WHERE id=?", (version_id, version["document_id"]))
             if suggestion:
@@ -294,5 +298,8 @@ def reindex_embeddings() -> int:
         with connect() as db:
             db.executemany("UPDATE chunks SET embedding=?,model_id=? WHERE id=?",
                            [(vector, model_id(), row["id"]) for row, vector in zip(batch, vectors)])
+            db.executemany("INSERT INTO chunk_embeddings(chunk_id,model_id,embedding) VALUES (?,?,?) "
+                           "ON CONFLICT(chunk_id,model_id) DO UPDATE SET embedding=excluded.embedding",
+                           [(row["id"], model_id(), vector) for row, vector in zip(batch, vectors)])
         total += len(batch)
     return total
