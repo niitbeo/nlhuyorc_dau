@@ -22,8 +22,12 @@ import io
 import base64
 from bs4 import BeautifulSoup
 
-# Fix Paddle oneDNN CPU issues on Windows
+# Fix Paddle oneDNN CPU issues & UTF-8 console on Windows
 os.environ["FLAGS_use_mkldnn"] = "False"
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
 # Add vietocr path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
