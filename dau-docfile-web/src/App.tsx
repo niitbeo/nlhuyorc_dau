@@ -200,14 +200,14 @@ export default function App() {
     setCustomFieldsEdit(normalized);
   };
 
-  // Xử lý Upload 1 hoặc Nhiều File / Cả Thư Mục
+  // Xử lý Upload 1 hoặc Nhiều File / Cả Thư Mục (Hỗ trợ PDF, Word DOCX, Excel XLSX, TXT/CSV, và Ảnh)
   const handleFilesUpload = async (fileList: FileList | null, isFolderUpload = false) => {
     if (!fileList || fileList.length === 0) return;
     const filesArray = Array.from(fileList).filter((f) =>
-      /\.(png|jpe?g|webp|bmp|tiff?)$/i.test(f.name)
+      /\.(pdf|docx?|xlsx?|csv|txt|md|json|png|jpe?g|webp|bmp|tiff?)$/i.test(f.name)
     );
     if (filesArray.length === 0) {
-      alert('Vui lòng chọn các tệp hình ảnh tài liệu (.png, .jpg, .jpeg, .webp, .bmp)!');
+      alert('Không tìm thấy tệp văn bản/tài liệu hợp lệ (.pdf, .docx, .xlsx, .txt, .png, .jpg...)!');
       return;
     }
 
@@ -473,7 +473,7 @@ export default function App() {
             ref={fileInputRef}
             type="file"
             multiple
-            accept="image/*"
+            accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.md,image/*"
             className="hidden"
             onChange={(e) => handleFilesUpload(e.target.files, false)}
           />
@@ -584,10 +584,10 @@ export default function App() {
               >
                 <Upload className="w-8 h-8 text-slate-500 group-hover:text-indigo-400 mx-auto mb-2 transition" />
                 <p className="text-xs font-semibold text-slate-200">
-                  Nhấn để chọn Ảnh hoặc kéo thả vào đây
+                  Nhấn để chọn PDF, Word (.docx), Excel, Ảnh hoặc kéo thả vào đây
                 </p>
                 <p className="text-[11px] text-slate-500 mt-1">
-                  Tự động xoay ảnh nghiêng, làm nét CLAHE, đọc chữ viết tay & bóc bảng HTML
+                  Hỗ trợ: .PDF (Điện tử & Scan), .DOCX, .XLSX, .TXT, .PNG, .JPG
                 </p>
               </div>
             </div>

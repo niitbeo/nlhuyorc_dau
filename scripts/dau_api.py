@@ -703,6 +703,36 @@ async def process_table(file: UploadFile = File(...)):
     return {"status": "success", "message": "Đã bóc bảng thành công", "htmls": htmls}
 
 
+def create_text_preview_image(title_text: str, body_text: str, save_img_path: str):
+    """Tạo ảnh preview đại diện cho tài liệu DOCX / TXT / XLSX để hiển thị đồng bộ trên Trạm OCR"""
+    from PIL import ImageDraw, ImageFont
+    w, h = 900, 1200
+    img = Image.new("RGB", (w, h), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    # Vẽ khung viền trang giấy A4
+    draw.rectangle([25, 25, w - 25, h - 25], outline=(200, 210, 225), width=2)
+    draw.rectangle([25, 25, w - 25, 95], fill=(30, 41, 59))
+    try:
+        font_title = ImageFont.truetype("arial.ttf", 20)
+        font_body = ImageFont.truetype("arial.ttf", 16)
+    except Exception:
+        font_title = ImageFont.load_default()
+        font_body = ImageFont.load_default()
+
+    draw.text((45, 48), f"TÀI LIỆU SỐ: {title_text[:55]}", fill=(255, 255, 255), font=font_title)
+
+    y_offset = 120
+    for line in body_text.split("\n")[:42]:
+        wrapped = [line[i:i+85] for i in range(0, max(1, len(line)), 85)]
+        for subline in wrapped:
+            if y_offset > h - 60:
+                break
+            draw.text((45, y_offset), subline, fill=(20, 25, 35), font=font_body)
+            y_offset += 24
+
+    img.save(save_img_path)
+
+
 @app.post("/api/docfile/upload")
 async def upload_and_analyze_document(
     file: UploadFile = File(...),
@@ -712,42 +742,193 @@ async def upload_and_analyze_document(
     custom_rules_json: str = Form("[]")
 ):
     """
-    Pipeline Toàn diện (Ingest -> Preprocess -> OCR Text/Table -> Arkham Parse -> Summary -> Graph)
-    Hỗ trợ cả Upload lẻ và Upload hàng loạt cả Thư mục (Folder Upload).
+    Pipeline Toàn diện hỗ trợ MỌI ĐỊNH DẠNG VĂN BẢN:
+    - PDF (.pdf): Tự động trích xuất text gốc + Render từng trang qua PyMuPDF để chạy VietOCR & Table OCR nếu là PDF scan!
+    - Word (.docx, .doc): Trích xuất toàn bộ đoạn văn + Chuyển toàn bộ Bảng trong Word sang HTML Table!
+    - Excel / CSV / TXT (.xlsx, .csv, .txt, .md): Trích xuất dữ liệu & bảng biểu!
+    - Ảnh (.png, .jpg, .jpeg, .webp, .bmp, .tif, .tiff): Chạy OpenCV Deskew/CLAHE + VietOCR + PP-Structure Table!
     """
     contents = await file.read()
     checksum = hashlib.sha256(contents).hexdigest()
     file_size = len(contents)
 
-    # Lưu file vật lý
     doc_id = str(uuid.uuid4())
-    ext = os.path.splitext(file.filename)[1].lower() or ".png"
+    orig_filename = file.filename or "tai_lieu"
+    ext = os.path.splitext(orig_filename)[1].lower() or ".png"
     safe_name = f"{doc_id}{ext}"
     save_path = os.path.join(UPLOAD_DIR, safe_name)
     with open(save_path, "wb") as f:
         f.write(contents)
 
-    # Giải mã ảnh
-    nparr = np.frombuffer(contents, np.uint8)
-    img_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if img_bgr is None:
-        raise HTTPException(status_code=400, detail="Không thể đọc định dạng ảnh này.")
-
-    # 1. Arkham Image Quality & Preprocessing
-    processed_bgr, quality_info = ArkhamImageProcessor.analyze_and_preprocess(img_bgr, auto_enhance=True)
-
-    # 2. OCR Routing (Văn bản vs Bảng biểu)
-    effective_mode = ocr_mode
-    if effective_mode == "auto":
-        effective_mode = quality_info.get("detected_layout", "text")
-
-    raw_text, lines_data, confidence = segment_and_ocr_lines(processed_bgr)
-    corrected_text = correct_text(raw_text)
-
+    raw_text = ""
+    corrected_text = ""
+    lines_data = []
     html_tables = []
-    if effective_mode in ("table", "auto") and table_engine is not None:
-        if quality_info.get("detected_layout") == "table" or ocr_mode == "table":
-            html_tables = extract_tables_from_image(processed_bgr)
+    confidence = 0.95
+    effective_mode = ocr_mode
+    quality_info = {
+        "width": 900,
+        "height": 1200,
+        "contrast_ratio": 0.9,
+        "skew_angle": 0.0,
+        "has_noise": False,
+        "is_blank": False,
+        "detected_layout": "document",
+        "classification": "CLEAN",
+        "operations_applied": [f"format({ext})"],
+        "analysis_ms": 5.0
+    }
+    preview_file_url = f"/files/{safe_name}"
+
+    # -----------------------------------------------------------------
+    # NHÁNH 1: XỬ LÝ FILE PDF (Cả PDF điện tử lẫn PDF Scan / Viết tay)
+    # -----------------------------------------------------------------
+    if ext == ".pdf":
+        import pymupdf
+        pdf_doc = pymupdf.open(stream=contents, filetype="pdf")
+        page_texts = []
+        preview_saved = False
+        total_pages = min(len(pdf_doc), 15)  # Xử lý tối đa 15 trang đầu để đảm bảo tốc độ
+
+        for pno in range(total_pages):
+            page = pdf_doc[pno]
+            # Render trang PDF ra ảnh độ phân giải 180 DPI
+            pix = page.get_pixmap(dpi=180)
+            img_bytes = pix.tobytes("png")
+            if not preview_saved:
+                preview_name = f"{doc_id}_page1.png"
+                preview_path = os.path.join(UPLOAD_DIR, preview_name)
+                with open(preview_path, "wb") as pf:
+                    pf.write(img_bytes)
+                preview_file_url = f"/files/{preview_name}"
+                preview_saved = True
+
+            # Kiểm tra xem trang PDF đã có lớp text gốc chưa
+            embedded_text = page.get_text("text").strip()
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            page_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+            if pno == 0 and page_bgr is not None:
+                page_bgr, quality_info = ArkhamImageProcessor.analyze_and_preprocess(page_bgr, auto_enhance=True)
+                quality_info["operations_applied"].append(f"pdf_pages({len(pdf_doc)})")
+
+            if len(embedded_text) > 40 and ocr_mode != "handwriting":
+                # PDF có sẵn text điện tử chuẩn
+                page_texts.append(f"--- [Trang {pno + 1}] ---\n{embedded_text}")
+            elif page_bgr is not None:
+                # PDF Scan ảnh -> Đưa vào VietOCR đọc!
+                p_raw, p_lines, p_conf = segment_and_ocr_lines(page_bgr)
+                page_texts.append(f"--- [Trang {pno + 1} - OCR] ---\n{p_raw}")
+                if pno == 0:
+                    lines_data = p_lines
+                    confidence = p_conf
+
+            # Bóc bảng trên trang PDF nếu có
+            if page_bgr is not None and (ocr_mode in ("table", "auto")) and table_engine is not None:
+                if quality_info.get("detected_layout") == "table" or ocr_mode == "table":
+                    t_htmls = extract_tables_from_image(page_bgr)
+                    html_tables.extend(t_htmls)
+
+        raw_text = "\n\n".join(page_texts)
+        corrected_text = correct_text(raw_text) if len(raw_text) < 2000 else raw_text
+        effective_mode = "pdf_hybrid"
+
+    # -----------------------------------------------------------------
+    # NHÁNH 2: XỬ LÝ FILE WORD (.DOCX)
+    # -----------------------------------------------------------------
+    elif ext in (".docx", ".doc"):
+        try:
+            import docx
+            doc_obj = docx.Document(io.BytesIO(contents))
+            paras = [p.text.strip() for p in doc_obj.paragraphs if p.text.strip()]
+            raw_text = "\n".join(paras)
+
+            # Bóc toàn bộ Bảng biểu trong file Word ra HTML Table
+            for tbl in doc_obj.tables:
+                rows_html = []
+                for r_idx, row in enumerate(tbl.rows):
+                    cells_html = []
+                    tag = "th" if r_idx == 0 else "td"
+                    for cell in row.cells:
+                        cells_html.append(f"<{tag}>{cell.text.strip()}</{tag}>")
+                    rows_html.append(f"<tr>{''.join(cells_html)}</tr>")
+                if rows_html:
+                    html_tables.append(f"<table>{''.join(rows_html)}</table>")
+
+            corrected_text = raw_text
+            effective_mode = "docx_native"
+            confidence = 0.99
+
+            # Tạo ảnh preview trang tài liệu để hiển thị bên khung trái Trạm OCR
+            preview_name = f"{doc_id}_preview.png"
+            preview_path = os.path.join(UPLOAD_DIR, preview_name)
+            create_text_preview_image(orig_filename, raw_text or "Tài liệu Word chứa bảng biểu", preview_path)
+            preview_file_url = f"/files/{preview_name}"
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Không thể đọc file Word ({orig_filename}): {e}")
+
+    # -----------------------------------------------------------------
+    # NHÁNH 3: XỬ LÝ FILE EXCEL (.XLSX) & TEXT / CSV (.TXT, .CSV, .MD)
+    # -----------------------------------------------------------------
+    elif ext in (".xlsx", ".xls"):
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(contents), data_only=True)
+            sheet_texts = []
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                rows_html = []
+                for r_idx, row in enumerate(ws.iter_rows(values_only=True)):
+                    if not any(row):
+                        continue
+                    row_vals = [str(c) if c is not None else "" for c in row]
+                    sheet_texts.append(" | ".join(row_vals))
+                    tag = "th" if r_idx == 0 else "td"
+                    cells = "".join([f"<{tag}>{v}</{tag}>" for v in row_vals])
+                    rows_html.append(f"<tr>{cells}</tr>")
+                if rows_html:
+                    html_tables.append(f"<table>{''.join(rows_html[:100])}</table>")
+            raw_text = "\n".join(sheet_texts)
+            corrected_text = raw_text
+            effective_mode = "excel_table"
+            confidence = 0.99
+
+            preview_name = f"{doc_id}_preview.png"
+            preview_path = os.path.join(UPLOAD_DIR, preview_name)
+            create_text_preview_image(orig_filename, raw_text, preview_path)
+            preview_file_url = f"/files/{preview_name}"
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Không thể đọc file Excel ({orig_filename}): {e}")
+
+    elif ext in (".txt", ".csv", ".md", ".json"):
+        raw_text = contents.decode("utf-8", errors="ignore")
+        corrected_text = raw_text
+        effective_mode = "text_native"
+        confidence = 1.0
+        preview_name = f"{doc_id}_preview.png"
+        preview_path = os.path.join(UPLOAD_DIR, preview_name)
+        create_text_preview_image(orig_filename, raw_text, preview_path)
+        preview_file_url = f"/files/{preview_name}"
+
+    # -----------------------------------------------------------------
+    # NHÁNH 4: XỬ LÝ HÌNH ẢNH SCAN / CHỤP ĐIỆN THOẠI (.PNG, .JPG, .WEBP, .BMP, .TIFF)
+    # -----------------------------------------------------------------
+    else:
+        nparr = np.frombuffer(contents, np.uint8)
+        img_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img_bgr is None:
+            raise HTTPException(status_code=400, detail=f"Định dạng file '{orig_filename}' không được hỗ trợ hoặc bị lỗi.")
+
+        processed_bgr, quality_info = ArkhamImageProcessor.analyze_and_preprocess(img_bgr, auto_enhance=True)
+        if effective_mode == "auto":
+            effective_mode = quality_info.get("detected_layout", "text")
+
+        raw_text, lines_data, confidence = segment_and_ocr_lines(processed_bgr)
+        corrected_text = correct_text(raw_text)
+
+        if effective_mode in ("table", "auto") and table_engine is not None:
+            if quality_info.get("detected_layout") == "table" or ocr_mode == "table":
+                html_tables = extract_tables_from_image(processed_bgr)
 
     # 3. Load Template Rules + Custom Rules
     rules = []
@@ -777,10 +958,9 @@ async def upload_and_analyze_document(
     summary_data = generate_arkham_summary(corrected_text, entities)
 
     # 6. Arkham Graph Builder
-    graph_data = build_arkham_graph(doc_id, file.filename, corrected_text, entities)
+    graph_data = build_arkham_graph(doc_id, orig_filename, corrected_text, entities)
 
     now_iso = datetime.now().isoformat()
-    file_url = f"/files/{safe_name}"
 
     # Lưu vào SQLite
     conn = sqlite3.connect(DB_PATH)
@@ -789,9 +969,9 @@ async def upload_and_analyze_document(
         INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         doc_id,
-        file.filename,
+        orig_filename,
         folder_path,
-        file_url,
+        preview_file_url,
         file_size,
         checksum,
         effective_mode,
@@ -813,9 +993,9 @@ async def upload_and_analyze_document(
 
     return {
         "id": doc_id,
-        "filename": file.filename,
+        "filename": orig_filename,
         "folder_path": folder_path,
-        "file_url": file_url,
+        "file_url": preview_file_url,
         "file_size": file_size,
         "checksum": checksum,
         "ocr_mode": effective_mode,
