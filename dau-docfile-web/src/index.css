@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom scrollbar for dark enterprise theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+.ocr-table-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.ocr-table-preview th,
+.ocr-table-preview td {
+  border: 1px solid #334155;
+  padding: 6px 10px;
+  text-align: left;
+}
+.ocr-table-preview tr:nth-child(even) {
+  background-color: rgba(30, 41, 59, 0.45);
+}
