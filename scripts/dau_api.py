@@ -127,7 +127,7 @@ def init_db():
 
 init_db()
 
-# --- 1. Load OCR Model (VietOCR) ---
+# --- 1. Load OCR Model (VietOCR) + Lazy Load Heavy Engines ---
 print("[INFO] Đang nạp mô hình VietOCR (Handwriting/Printed)...")
 config_path = os.path.join(BASE_DIR, '..', 'configs', 'vgg_transformer_base.yml')
 if not os.path.exists(config_path):
@@ -140,47 +140,55 @@ if os.path.exists(weights_path):
 config['dataset']['image_max_width'] = 2048
 ocr_predictor = Predictor(config)
 
-# --- 1B. Load PaddleOCR Text Detector (Line Segmentation for Multi-line Documents) ---
-print("[INFO] Đang nạp PaddleOCR Line Detector...")
-try:
-    from paddleocr import PaddleOCR
-    line_detector = PaddleOCR(use_angle_cls=True, lang="vi", show_log=False)
-except Exception as e:
-    print(f"[WARN] Không thể khởi tạo PaddleOCR detector ({e}), sẽ dùng chế độ cắt dòng OpenCV thông minh.")
-    line_detector = None
+# Lazy-loaded engines để cổng 8000 mở ngay lập tức trong 2 giây!
+_table_engine = None
+_table_engine_loaded = False
+_protonx_tokenizer = None
+_protonx_model = None
+_protonx_loaded = False
+_ner_pipeline = None
+_ner_loaded = False
 
-# --- 2. Load Table Engine (PP-Structure) ---
-print("[INFO] Đang nạp mô hình Table OCR (PaddleX)...")
-try:
-    from paddleocr import PPStructureV3
-    table_engine = PPStructureV3(
-        use_table_recognition=True,
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=False
-    )
-except Exception:
-    print("[WARN] Chưa cài đặt paddlex[ocr] hoặc lỗi khởi tạo. Sẽ dùng bộ dò bảng OpenCV dự phòng.")
-    table_engine = None
+def get_table_engine():
+    global _table_engine, _table_engine_loaded
+    if not _table_engine_loaded:
+        _table_engine_loaded = True
+        try:
+            print("[INFO] Đang nạp Table Engine (PPStructureV3)...")
+            from paddleocr import PPStructureV3
+            _table_engine = PPStructureV3(
+                use_table_recognition=True,
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False
+            )
+        except Exception as e:
+            print(f"[WARN] Không thể nạp PPStructureV3: {e}")
+    return _table_engine
 
-# --- 3. Load ProtonX Corrector ---
-print("[INFO] Đang nạp máy sửa lỗi chính tả ProtonX...")
-try:
-    protonx_tokenizer = PreTrainedTokenizerFast.from_pretrained("protonx-models/protonx-legal-tc")
-    protonx_model = AutoModelForSeq2SeqLM.from_pretrained("protonx-models/protonx-legal-tc")
-except Exception as e:
-    print(f"[WARN] Lỗi nạp mô hình chính tả: {e}")
-    protonx_tokenizer = None
-    protonx_model = None
+def get_protonx():
+    global _protonx_tokenizer, _protonx_model, _protonx_loaded
+    if not _protonx_loaded:
+        _protonx_loaded = True
+        try:
+            print("[INFO] Đang nạp máy sửa lỗi chính tả ProtonX...")
+            _protonx_tokenizer = PreTrainedTokenizerFast.from_pretrained("protonx-models/protonx-legal-tc")
+            _protonx_model = AutoModelForSeq2SeqLM.from_pretrained("protonx-models/protonx-legal-tc")
+        except Exception as e:
+            print(f"[WARN] Lỗi nạp mô hình chính tả: {e}")
+    return _protonx_tokenizer, _protonx_model
 
-# --- 4. Load PhoBERT / Electra NER (Arkham Parse Layer 2) ---
-print("[INFO] Đang nạp mô hình NER Tiếng Việt (NlpHUST Electra)...")
-try:
-    from transformers import pipeline
-    ner_pipeline = pipeline("ner", model="NlpHUST/ner-vietnamese-electra-base", aggregation_strategy="simple")
-except Exception as e:
-    print(f"[WARN] Chưa nạp được NlpHUST NER ({e}), dùng chế độ Regex + Heuristic NER.")
-    ner_pipeline = None
+def get_ner_pipeline():
+    global _ner_pipeline, _ner_loaded
+    if not _ner_loaded:
+        _ner_loaded = True
+        try:
+            print("[INFO] Đang nạp mô hình NER Tiếng Việt (NlpHUST Electra)...")
+            from transformers import pipeline
+            _ner_pipeline = pipeline("ner", model="NlpHUST/ner-vietnamese-electra-base", aggregation_strategy="simple")
+        except Exception as e:
+            print(f"[WARN] Chưa nạp được NlpHUST NER ({e}), dùng chế độ Regex + Heuristic NER.")
+    return _ner_pipeline
 
 
 # =====================================================================
@@ -361,8 +369,13 @@ def segment_and_ocr_lines(img_bgr: np.ndarray) -> Tuple[str, List[Dict[str, Any]
     return full_raw, lines_output, 0.93
 
 
-def correct_text(text: str) -> str:
-    if not protonx_model or not text or not text.strip():
+def correct_text(text: str, use_llm: bool = False) -> str:
+    if not text or not text.strip():
+        return text
+    if not use_llm:
+        return text
+    tok, mdl = get_protonx()
+    if not mdl or not tok:
         return text
     try:
         lines = text.split("\n")
@@ -371,9 +384,9 @@ def correct_text(text: str) -> str:
             if not line.strip():
                 corrected_lines.append("")
                 continue
-            input_ids = protonx_tokenizer(line[:250], return_tensors="pt").input_ids
-            outputs = protonx_model.generate(input_ids, max_length=256)
-            corrected_lines.append(protonx_tokenizer.decode(outputs[0], skip_special_tokens=True))
+            input_ids = tok(line[:250], return_tensors="pt").input_ids
+            outputs = mdl.generate(input_ids, max_length=256)
+            corrected_lines.append(tok.decode(outputs[0], skip_special_tokens=True))
         return "\n".join(corrected_lines)
     except Exception:
         return text
@@ -435,25 +448,7 @@ def extract_arkham_entities(text: str, custom_rules: List[Dict[str, str]] = None
     mssv_matches = re.findall(r'(?:MSSV|Mã SV|Mã số SV)[:\s]*([0-9A-Za-z]{5,12})', text, re.IGNORECASE)
     entities["MSSV"] = list(set(mssv_matches))
 
-    # LAYER 2: PhoBERT / Electra NER + Heuristic Tiếng Việt
-    if ner_pipeline:
-        try:
-            ner_res = ner_pipeline(text[:1000])
-            for ent in ner_res:
-                grp = ent.get("entity_group", "")
-                word = ent.get("word", "").replace("_", " ").strip()
-                if len(word) < 2:
-                    continue
-                if grp == "PER":
-                    entities["PERSON"].append(word)
-                elif grp == "ORG":
-                    entities["ORGANIZATION"].append(word)
-                elif grp == "LOC":
-                    entities["LOCATION"].append(word)
-        except Exception:
-            pass
-
-    # Bổ sung Heuristic bắt Phòng/Khoa/Trường và Tên người nếu OCR viết tay ngắn
+    # LAYER 2: Heuristic Tiếng Việt siêu tốc + PhoBERT / Electra NER
     org_patterns = re.findall(
         r'((?:Trường|Phòng|Khoa|Bộ|Ban|Trung tâm|Hội đồng)\s+[A-ZĐÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ][a-zđáàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]+(?:\s+[A-ZĐa-zđáàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ]+){1,4})',
         text
@@ -635,11 +630,12 @@ def build_arkham_graph(doc_id: str, filename: str, text: str, entities: Dict[str
 
 
 def extract_tables_from_image(img_bgr: np.ndarray) -> List[str]:
-    if not table_engine:
+    tbl_eng = get_table_engine()
+    if not tbl_eng:
         return []
     final_htmls = []
     try:
-        res_list = list(table_engine.predict(img_bgr))
+        res_list = list(tbl_eng.predict(img_bgr))
         for res in res_list:
             res_dict = dict(res)
             html_str = res_dict.get('html', res_dict.get('table_html', ''))
@@ -823,11 +819,10 @@ async def upload_and_analyze_document(
                     lines_data = p_lines
                     confidence = p_conf
 
-            # Bóc bảng trên trang PDF nếu có
-            if page_bgr is not None and (ocr_mode in ("table", "auto")) and table_engine is not None:
-                if quality_info.get("detected_layout") == "table" or ocr_mode == "table":
-                    t_htmls = extract_tables_from_image(page_bgr)
-                    html_tables.extend(t_htmls)
+            # Bóc bảng nếu người dùng chọn chế độ Bảng biểu
+            if page_bgr is not None and ocr_mode == "table":
+                t_htmls = extract_tables_from_image(page_bgr)
+                html_tables.extend(t_htmls)
 
         raw_text = "\n\n".join(page_texts)
         corrected_text = correct_text(raw_text) if len(raw_text) < 2000 else raw_text
@@ -926,9 +921,8 @@ async def upload_and_analyze_document(
         raw_text, lines_data, confidence = segment_and_ocr_lines(processed_bgr)
         corrected_text = correct_text(raw_text)
 
-        if effective_mode in ("table", "auto") and table_engine is not None:
-            if quality_info.get("detected_layout") == "table" or ocr_mode == "table":
-                html_tables = extract_tables_from_image(processed_bgr)
+        if ocr_mode == "table":
+            html_tables = extract_tables_from_image(processed_bgr)
 
     # 3. Load Template Rules + Custom Rules
     rules = []
